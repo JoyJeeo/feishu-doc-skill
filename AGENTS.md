@@ -90,6 +90,17 @@ Authorization is a hard gate between Specs:
 
 An unsplit parent may be completed in one authorized implementation when its acceptance criteria and verification pass. A split parent may be marked complete only after every Spec is completed and the final parent-level acceptance criteria pass.
 
+## Manual Skill acceptance
+
+Every newly implemented Skill capability requires a user-visible forward test and explicit manual acceptance from the user. Local tests and MCP verification are necessary evidence, but they do not by themselves make the capability `已完成`.
+
+- Use the dedicated test knowledge base at `https://bcn9fa1lvktb.feishu.cn/wiki/AFjcwZxC6i3ny5k0cX8c1alFnnb?fromScene=spaceOverview` for realistic test artifacts.
+- The user authorizes creating and modifying files needed for testing inside that knowledge base. This defines the allowed test area; it does not replace the required preview and confirmation for each remote write.
+- Prefer a read-only demonstration when it proves the capability. When a write is necessary, create a clearly named test artifact or modify only a declared test scope after the user confirms its `preview_id`.
+- Do not delete test artifacts automatically. Deletion remains disabled unless the product decisions are explicitly revised.
+- Present the tested capability, target link, input or before-state, observed result, limitations, and verification evidence so the user can inspect the effect.
+- Keep the active requirement or Spec `进行中` after implementation until the user explicitly accepts the demonstrated result. Only then mark it `已完成` and request authorization for the next Spec.
+
 ## Project boundaries
 
 - This is a personal Skill for Feishu China cloud documents.

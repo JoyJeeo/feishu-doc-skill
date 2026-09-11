@@ -14,6 +14,8 @@ from scripts.feishu_guard import (
 
 READ_TOOL = "mcp__feishu__docx_v1_document_get"
 WRITE_TOOL = "mcp__feishu__docx_v1_documentBlock_patch"
+CREATE_TOOL = "mcp__feishu__wiki_v2_spaceNode_create"
+CREATE_BLOCKS_TOOL = "mcp__feishu__docx_v1_documentBlockChildren_create"
 
 
 def preview_spec(**overrides):
@@ -28,6 +30,28 @@ def preview_spec(**overrides):
         "risks": [],
         "required_tools": [WRITE_TOOL, READ_TOOL],
         "verification": {"text": "after"},
+    }
+    spec.update(overrides)
+    return spec
+
+
+def create_preview_spec(**overrides):
+    spec = {
+        "target": "https://example.feishu.cn/wiki/parent",
+        "resource_type": "docx",
+        "identity": "user",
+        "operation": "create",
+        "scope": {"parent": "https://example.feishu.cn/wiki/parent", "placement": "wiki_child"},
+        "before_state": {"parent_revision": 1, "children": []},
+        "changes": {
+            "title": "测试技术方案",
+            "template": "technical_design",
+            "blocks": [{"kind": "heading1", "content": "摘要"}],
+            "pending_confirmations": [],
+        },
+        "risks": [],
+        "required_tools": [CREATE_TOOL, CREATE_BLOCKS_TOOL, READ_TOOL],
+        "verification": {"title": "测试技术方案", "block_count": 1},
     }
     spec.update(overrides)
     return spec
@@ -162,6 +186,29 @@ class PreviewTests(unittest.TestCase):
     def test_malformed_preview_returns_guard_error(self):
         with self.assertRaisesRegex(GuardError, "预览缺少字段"):
             validate_preview({}, {}, "fs-missing", [READ_TOOL, WRITE_TOOL])
+
+    def test_docx_create_preview_requires_and_preserves_complete_structure(self):
+        spec = create_preview_spec()
+        preview = make_preview(spec)
+        result = validate_preview(
+            preview,
+            spec["before_state"],
+            preview["preview_id"],
+            spec["required_tools"],
+        )
+        self.assertTrue(result["valid"])
+        self.assertEqual(spec["changes"], preview["changes"])
+
+    def test_docx_create_preview_rejects_incomplete_content(self):
+        invalid_changes = (
+            {"title": "", "blocks": [{"kind": "text"}], "pending_confirmations": []},
+            {"title": "测试", "blocks": [], "pending_confirmations": []},
+            {"title": "测试", "blocks": [{}], "pending_confirmations": []},
+            {"title": "测试", "blocks": [{"kind": "text"}]},
+        )
+        for changes in invalid_changes:
+            with self.subTest(changes=changes), self.assertRaises(GuardError):
+                make_preview(create_preview_spec(changes=changes))
 
 
 if __name__ == "__main__":

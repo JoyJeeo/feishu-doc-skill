@@ -15,3 +15,5 @@ Use for every request that could change a Feishu resource.
 This workflow performs no remote writes. A statement made before the preview exists cannot authorize `apply`.
 
 For cross-resource work, create separate previews and explain their dependency order.
+
+For a new `docx` document, follow [docx-create-preview.md](docx-create-preview.md).

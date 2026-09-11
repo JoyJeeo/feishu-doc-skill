@@ -10,6 +10,8 @@ Use for read-only inspection, summarization, comparison, or audit.
 6. Analyze the returned content using the quality rules.
 7. Report findings, evidence, uncertainties, and unsupported areas.
 
+For a `docx` quality audit, read the document model and follow [docx-audit.md](docx-audit.md).
+
 Do not:
 
 - call a write tool;

@@ -40,6 +40,8 @@ Use `scripts/feishu_guard.py` for deterministic URL classification, identity sel
 
 Read [references/common/preview-protocol.md](references/common/preview-protocol.md) for every `preview` or `apply` request. Read [references/common/quality-rules.md](references/common/quality-rules.md) when generating or validating user-facing content.
 
+For any `docx` content request, read [references/docx/document-model.md](references/docx/document-model.md). For a document quality audit, follow [workflows/docx-audit.md](workflows/docx-audit.md) within `analyze` mode. For new document content or a creation preview, read [references/docx/content-generation.md](references/docx/content-generation.md) and [references/docx/templates.md](references/docx/templates.md), then follow [workflows/docx-create-preview.md](workflows/docx-create-preview.md).
+
 ## Stop conditions
 
 Stop the affected operation without side effects when:

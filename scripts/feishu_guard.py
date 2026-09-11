@@ -127,6 +127,20 @@ def _preview_payload(preview: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_docx_create(scope: Any, changes: Any) -> None:
+    if not isinstance(scope, dict) or not isinstance(scope.get("parent"), str) or not scope["parent"].strip():
+        raise GuardError("docx 创建预览必须指定 scope.parent")
+    if not isinstance(changes, dict) or not isinstance(changes.get("title"), str) or not changes["title"].strip():
+        raise GuardError("docx 创建预览必须包含非空 changes.title")
+    blocks = changes.get("blocks")
+    if not isinstance(blocks, list) or not blocks:
+        raise GuardError("docx 创建预览必须包含完整的非空 changes.blocks")
+    if any(not isinstance(block, dict) or not isinstance(block.get("kind"), str) for block in blocks):
+        raise GuardError("docx 创建预览的每个块必须包含 kind")
+    if not isinstance(changes.get("pending_confirmations"), list):
+        raise GuardError("docx 创建预览必须包含 changes.pending_confirmations 数组")
+
+
 def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
     missing = sorted(PREVIEW_FIELDS - spec.keys())
     if missing:
@@ -146,6 +160,8 @@ def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
         raise GuardError(f"操作默认关闭：{operation}")
     if operation not in WRITE_OPERATIONS:
         raise GuardError(f"不支持的写入操作：{operation}")
+    if spec["resource_type"] == "docx" and operation == "create":
+        _validate_docx_create(spec["scope"], spec["changes"])
 
     identity = spec.get("identity", "user")
     explicit_application = bool(spec.get("application_identity_explicit", False))
@@ -200,6 +216,8 @@ def validate_preview(
         raise GuardError(f"不支持的写入操作：{operation}")
     if not isinstance(preview["resource_type"], str) or preview["resource_type"] not in RESOURCE_TYPES:
         raise GuardError(f"不支持的资源类型：{preview['resource_type']}")
+    if preview["resource_type"] == "docx" and operation == "create":
+        _validate_docx_create(preview["scope"], preview["changes"])
     if not isinstance(preview["required_tools"], list) or not preview["required_tools"]:
         raise GuardError("required_tools 必须是非空数组")
 
