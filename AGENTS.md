@@ -27,6 +27,10 @@ current explicit user instruction
 
 Do not silently resolve a material conflict. Report it and stop only the affected work when user direction is required.
 
+## Execution environment
+
+Run every repository-related shell command in the Conda `leju` environment, including file inspection, scripts, tests, formatters, and Git commands. Prefer the explicit form `conda run -n leju <command>` so the environment is visible in command records; if the shell is already activated, verify `CONDA_DEFAULT_ENV=leju` before relying on it. Use `python`, not `python3`: this environment provides `/opt/homebrew/anaconda3/envs/leju/bin/python`, while `python3` may resolve to Homebrew Python outside the environment.
+
 ## Status record
 
 `.ai/STATUS.md` is the repository's current-state record and the handoff entry point for future AI tasks. It is a snapshot as of its recorded update time, not an automatically generated live dashboard.
@@ -101,8 +105,8 @@ An unsplit parent may be completed in one authorized implementation when its acc
 For local safety-framework changes, run:
 
 ```bash
-python3 -m unittest discover -s tests -v
-git diff --check
+conda run -n leju python -m unittest discover -s tests -v
+conda run -n leju git diff --check
 ```
 
 Record the actual result in `.ai/STATUS.md`. Local tests do not prove real Feishu MCP compatibility; report remote integration as unverified until an authorized test completes.
