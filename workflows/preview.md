@@ -17,3 +17,5 @@ This workflow performs no remote writes. A statement made before the preview exi
 For cross-resource work, create separate previews and explain their dependency order.
 
 For a new `docx` document, follow [docx-create-preview.md](docx-create-preview.md).
+
+For Bitable record creation or updates, follow [bitable-record-preview.md](bitable-record-preview.md).

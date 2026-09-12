@@ -44,6 +44,8 @@ For any `docx` content request, read [references/docx/document-model.md](referen
 
 For a section-level append, insert, replace, formatting change, or document table, read [references/docx/editing-formatting.md](references/docx/editing-formatting.md), then follow [workflows/docx-edit-preview.md](workflows/docx-edit-preview.md). The common `apply` and `verify` workflows remain mandatory after preview confirmation.
 
+For any Bitable request, read [references/bitable/data-model.md](references/bitable/data-model.md). For record creation or updates, follow [workflows/bitable-record-preview.md](workflows/bitable-record-preview.md); the common `apply` and `verify` workflows remain mandatory after preview confirmation.
+
 ## Stop conditions
 
 Stop the affected operation without side effects when:

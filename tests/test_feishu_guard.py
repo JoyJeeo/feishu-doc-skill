@@ -6,6 +6,7 @@ from scripts.feishu_guard import (
     identity_parameters,
     make_preview,
     missing_tools,
+    summarize_batch_outcomes,
     validate_feishu_tool,
     validate_mode,
     validate_preview,
@@ -16,6 +17,9 @@ READ_TOOL = "mcp__feishu__docx_v1_document_get"
 WRITE_TOOL = "mcp__feishu__docx_v1_documentBlock_patch"
 CREATE_TOOL = "mcp__feishu__wiki_v2_spaceNode_create"
 CREATE_BLOCKS_TOOL = "mcp__feishu__docx_v1_documentBlockChildren_create"
+BITABLE_READ_TOOL = "mcp__feishu__bitable_v1_appTableRecord_search"
+BITABLE_CREATE_TOOL = "mcp__feishu__bitable_v1_appTableRecord_create"
+BITABLE_UPDATE_TOOL = "mcp__feishu__bitable_v1_appTableRecord_update"
 
 
 def preview_spec(**overrides):
@@ -75,6 +79,77 @@ def create_preview_spec(**overrides):
         "risks": [],
         "required_tools": [CREATE_TOOL, CREATE_BLOCKS_TOOL, READ_TOOL],
         "verification": {"title": "测试技术方案", "block_count": 1},
+    }
+    spec.update(overrides)
+    return spec
+
+
+def bitable_preview_spec(operation="create", **overrides):
+    records = [
+        {
+            "record_id": None if operation == "create" else "rec-1",
+            "business_key_value": "P-002" if operation == "create" else "P-001",
+            "before_fields": {} if operation == "create" else {"状态": "进行中"},
+            "after_fields": (
+                {"项目编号": "P-002", "状态": "未开始"}
+                if operation == "create"
+                else {"状态": "已完成"}
+            ),
+            "field_differences": (
+                [
+                    {"field": "状态", "before": None, "after": "未开始"},
+                    {"field": "项目编号", "before": None, "after": "P-002"},
+                ]
+                if operation == "create"
+                else [{"field": "状态", "before": "进行中", "after": "已完成"}]
+            ),
+        }
+    ]
+    spec = {
+        "target": "https://example.feishu.cn/base/bascnTest",
+        "resource_type": "bitable",
+        "identity": "user",
+        "operation": operation,
+        "scope": {
+            "entity": "records",
+            "app_token": "bascnTest",
+            "table_id": "tblTest",
+            "table_name": "项目台账",
+            "business_key_field": "项目编号",
+            "record_count": 1,
+        },
+        "before_state": {
+            "app_token": "bascnTest",
+            "table_id": "tblTest",
+            "table_name": "项目台账",
+            "fields_pagination_complete": True,
+            "records_pagination_complete": True,
+            "fields": [
+                {"field_id": "fld-key", "field_name": "项目编号", "ui_type": "Text"},
+                {
+                    "field_id": "fld-status",
+                    "field_name": "状态",
+                    "ui_type": "SingleSelect",
+                    "options": ["未开始", "进行中", "已完成"],
+                },
+                {"field_id": "fld-budget", "field_name": "预算", "ui_type": "Number"},
+                {"field_id": "fld-formula", "field_name": "汇总", "ui_type": "Formula"},
+            ],
+            "records": [
+                {"record_id": "rec-1", "fields": {"项目编号": "P-001", "状态": "进行中"}}
+            ],
+        },
+        "changes": {
+            "records": records,
+            "quality_issues": [],
+            "pending_confirmations": [],
+        },
+        "risks": [],
+        "required_tools": [
+            BITABLE_READ_TOOL,
+            BITABLE_CREATE_TOOL if operation == "create" else BITABLE_UPDATE_TOOL,
+        ],
+        "verification": {"business_keys": [records[0]["business_key_value"]]},
     }
     spec.update(overrides)
     return spec
@@ -276,6 +351,86 @@ class PreviewTests(unittest.TestCase):
         for changes in invalid_changes:
             with self.subTest(changes=changes), self.assertRaises(GuardError):
                 make_preview(create_preview_spec(changes=changes))
+
+    def test_bitable_create_requires_zero_business_key_matches(self):
+        spec = bitable_preview_spec()
+        preview = make_preview(spec)
+        self.assertEqual("bitable", preview["resource_type"])
+
+        spec["changes"]["records"][0]["business_key_value"] = "P-001"
+        spec["changes"]["records"][0]["after_fields"]["项目编号"] = "P-001"
+        with self.assertRaisesRegex(GuardError, "零匹配"):
+            make_preview(spec)
+
+    def test_bitable_update_requires_one_exact_match(self):
+        spec = bitable_preview_spec("update")
+        preview = make_preview(spec)
+        result = validate_preview(
+            preview,
+            spec["before_state"],
+            preview["preview_id"],
+            spec["required_tools"],
+        )
+        self.assertTrue(result["valid"])
+
+        spec["before_state"]["records"].append(
+            {"record_id": "rec-2", "fields": {"项目编号": "P-001", "状态": "进行中"}}
+        )
+        with self.assertRaisesRegex(GuardError, "唯一匹配"):
+            make_preview(spec)
+
+    def test_bitable_preview_requires_complete_pagination(self):
+        spec = bitable_preview_spec()
+        spec["before_state"]["records_pagination_complete"] = False
+        with self.assertRaisesRegex(GuardError, "完整分页"):
+            make_preview(spec)
+
+    def test_bitable_preview_checks_field_types_and_writability(self):
+        spec = bitable_preview_spec("update")
+        record = spec["changes"]["records"][0]
+        record["before_fields"] = {"预算": 100}
+        record["after_fields"] = {"预算": "一百"}
+        record["field_differences"] = [{"field": "预算", "before": 100, "after": "一百"}]
+        spec["before_state"]["records"][0]["fields"]["预算"] = 100
+        with self.assertRaisesRegex(GuardError, "字段类型"):
+            make_preview(spec)
+
+        record["before_fields"] = {"汇总": 100}
+        record["after_fields"] = {"汇总": 200}
+        record["field_differences"] = [{"field": "汇总", "before": 100, "after": 200}]
+        spec["before_state"]["records"][0]["fields"]["汇总"] = 100
+        with self.assertRaisesRegex(GuardError, "只读字段"):
+            make_preview(spec)
+
+    def test_bitable_preview_rejects_unplanned_select_option(self):
+        spec = bitable_preview_spec("update")
+        record = spec["changes"]["records"][0]
+        record["after_fields"] = {"状态": "等待中"}
+        record["field_differences"] = [{"field": "状态", "before": "进行中", "after": "等待中"}]
+        with self.assertRaisesRegex(GuardError, "选项"):
+            make_preview(spec)
+
+    def test_bitable_preview_rejects_misleading_field_diff(self):
+        spec = bitable_preview_spec("update")
+        spec["changes"]["records"][0]["field_differences"][0]["after"] = "未开始"
+        with self.assertRaisesRegex(GuardError, "字段差异"):
+            make_preview(spec)
+
+    def test_bitable_batch_result_distinguishes_every_planned_key(self):
+        result = summarize_batch_outcomes(
+            ["P-001", "P-002", "P-003"],
+            ["P-001"],
+            {"P-002": "字段类型不匹配"},
+        )
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(["P-001"], result["successful"])
+        self.assertEqual(
+            [{"business_key": "P-002", "reason": "字段类型不匹配"}], result["failed"]
+        )
+        self.assertEqual(["P-003"], result["unattempted"])
+
+        with self.assertRaisesRegex(GuardError, "同时成功和失败"):
+            summarize_batch_outcomes(["P-001"], ["P-001"], {"P-001": "冲突"})
 
 
 if __name__ == "__main__":

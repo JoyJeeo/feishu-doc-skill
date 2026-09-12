@@ -44,6 +44,14 @@ DOCX_BLOCK_KINDS = {f"heading{level}" for level in range(1, 10)} | {
     "callout",
     "columns",
 }
+BITABLE_READ_ONLY_FIELD_TYPES = {
+    "Formula",
+    "CreatedTime",
+    "ModifiedTime",
+    "CreatedUser",
+    "ModifiedUser",
+    "AutoNumber",
+}
 PREVIEW_FIELDS = {
     "target",
     "resource_type",
@@ -162,6 +170,39 @@ def _string_list(value: Any, field: str, *, allow_empty: bool = False) -> list[s
     return value
 
 
+def summarize_batch_outcomes(
+    planned_keys: Any,
+    successful_keys: Any,
+    failed_by_key: Any,
+) -> dict[str, Any]:
+    planned = _string_list(planned_keys, "planned_keys")
+    successful = set(_string_list(successful_keys, "successful_keys", allow_empty=True))
+    if not isinstance(failed_by_key, dict) or any(
+        not isinstance(key, str)
+        or not key.strip()
+        or not isinstance(reason, str)
+        or not reason.strip()
+        for key, reason in failed_by_key.items()
+    ):
+        raise GuardError("failed_by_key 必须将业务主键映射到非空失败原因")
+    planned_set = set(planned)
+    failed = set(failed_by_key)
+    if not (successful | failed) <= planned_set:
+        raise GuardError("批量结果包含计划外业务主键")
+    if successful & failed:
+        raise GuardError("同一业务主键不能同时成功和失败")
+
+    unattempted = planned_set - successful - failed
+    return {
+        "status": "success" if successful == planned_set else "partial" if successful else "failed",
+        "successful": [key for key in planned if key in successful],
+        "failed": [
+            {"business_key": key, "reason": failed_by_key[key]} for key in planned if key in failed
+        ],
+        "unattempted": [key for key in planned if key in unattempted],
+    }
+
+
 def _validate_docx_block_plan(blocks: Any) -> None:
     if not isinstance(blocks, list) or not blocks:
         raise GuardError("docx 编辑预览必须包含非空 changes.after_blocks")
@@ -268,6 +309,168 @@ def _validate_docx_edit(scope: Any, before_state: Any, changes: Any, risks: Any)
         raise GuardError("docx 编辑预览必须包含 changes.pending_confirmations 数组")
 
 
+def _validate_bitable_value(field: dict[str, Any], value: Any) -> None:
+    field_name = field["field_name"]
+    ui_type = field["ui_type"]
+    valid = False
+    if ui_type in {"Text", "Email", "Barcode", "SingleSelect", "Phone"}:
+        valid = isinstance(value, str)
+    elif ui_type in {"Number", "Progress", "Currency", "Rating"}:
+        valid = isinstance(value, (int, float)) and not isinstance(value, bool)
+    elif ui_type == "MultiSelect":
+        valid = (
+            isinstance(value, list)
+            and all(isinstance(item, str) for item in value)
+            and len(value) == len(set(value))
+        )
+    elif ui_type == "DateTime":
+        valid = isinstance(value, int) and not isinstance(value, bool)
+    elif ui_type == "Checkbox":
+        valid = isinstance(value, bool)
+    elif ui_type == "Url":
+        valid = (
+            isinstance(value, dict)
+            and isinstance(value.get("link"), str)
+            and bool(value["link"].strip())
+            and ("text" not in value or isinstance(value["text"], str))
+        )
+    elif ui_type in BITABLE_READ_ONLY_FIELD_TYPES:
+        raise GuardError(f"Bitable 只读字段不能写入：{field_name}")
+    else:
+        raise GuardError(f"Bitable 字段类型尚未支持写入校验：{field_name} ({ui_type})")
+    if not valid:
+        raise GuardError(f"Bitable 字段类型不匹配：{field_name} ({ui_type})")
+    if ui_type in {"SingleSelect", "MultiSelect"}:
+        options = field.get("options")
+        values = [value] if ui_type == "SingleSelect" else value
+        if (
+            not isinstance(options, list)
+            or any(not isinstance(option, str) or not option for option in options)
+            or any(item not in options for item in values)
+        ):
+            raise GuardError(f"Bitable 选项字段包含未确认的新选项：{field_name}")
+
+
+def _validate_bitable_record_plan(scope: Any, before_state: Any, changes: Any, operation: str) -> None:
+    if operation not in {"create", "update"}:
+        raise GuardError("Bitable 记录预览只支持 create 或 update")
+    required_scope = ("app_token", "table_id", "table_name", "business_key_field")
+    if not isinstance(scope, dict) or scope.get("entity") != "records" or any(
+        not isinstance(scope.get(field), str) or not scope[field].strip() for field in required_scope
+    ):
+        raise GuardError("Bitable 记录预览必须唯一指定应用、数据表和业务主键")
+    if not isinstance(before_state, dict) or any(
+        before_state.get(field) != scope[field] for field in ("app_token", "table_id", "table_name")
+    ):
+        raise GuardError("Bitable 当前状态与预览目标不一致")
+    if not before_state.get("fields_pagination_complete") or not before_state.get(
+        "records_pagination_complete"
+    ):
+        raise GuardError("Bitable 字段和业务主键匹配结果必须完成完整分页")
+
+    fields = before_state.get("fields")
+    if not isinstance(fields, list) or not fields:
+        raise GuardError("Bitable 当前状态必须包含字段清单")
+    field_schema = {}
+    field_ids = set()
+    for field in fields:
+        if not isinstance(field, dict) or any(
+            not isinstance(field.get(key), str) or not field[key].strip()
+            for key in ("field_id", "field_name", "ui_type")
+        ):
+            raise GuardError("Bitable 字段清单不完整")
+        if field["field_name"] in field_schema or field["field_id"] in field_ids:
+            raise GuardError("Bitable 字段清单包含重复字段")
+        field_schema[field["field_name"]] = field
+        field_ids.add(field["field_id"])
+    business_key = scope["business_key_field"]
+    if business_key not in field_schema:
+        raise GuardError("Bitable 业务主键不在字段清单中")
+
+    current_records = before_state.get("records")
+    if not isinstance(current_records, list):
+        raise GuardError("Bitable 当前状态必须包含记录匹配结果")
+    records_by_id = {}
+    for record in current_records:
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("record_id"), str)
+            or not record["record_id"].strip()
+            or not isinstance(record.get("fields"), dict)
+        ):
+            raise GuardError("Bitable 记录匹配结果不完整")
+        if record["record_id"] in records_by_id:
+            raise GuardError("Bitable 记录匹配结果包含重复 record_id")
+        records_by_id[record["record_id"]] = record["fields"]
+
+    if not isinstance(changes, dict) or not isinstance(changes.get("records"), list) or not changes["records"]:
+        raise GuardError("Bitable 预览必须包含非空记录变更")
+    if scope.get("record_count") != len(changes["records"]):
+        raise GuardError("Bitable 预览记录数量与范围不一致")
+    if not isinstance(changes.get("quality_issues"), list) or not isinstance(
+        changes.get("pending_confirmations"), list
+    ):
+        raise GuardError("Bitable 预览必须包含数据质量问题和待确认项数组")
+
+    planned_keys = set()
+    for record in changes["records"]:
+        if not isinstance(record, dict):
+            raise GuardError("Bitable 记录变更必须是结构化对象")
+        key_value = record.get("business_key_value")
+        if not isinstance(key_value, str) or not key_value.strip() or key_value in planned_keys:
+            raise GuardError("Bitable 预览中的业务主键必须非空且不重复")
+        planned_keys.add(key_value)
+        matches = [
+            record_id
+            for record_id, values in records_by_id.items()
+            if values.get(business_key) == key_value
+        ]
+
+        before_fields = record.get("before_fields")
+        after_fields = record.get("after_fields")
+        if not isinstance(before_fields, dict) or not isinstance(after_fields, dict) or not after_fields:
+            raise GuardError("Bitable 记录变更必须包含前后字段值")
+        if operation == "create":
+            if matches:
+                raise GuardError("Bitable 创建要求业务主键零匹配")
+            if record.get("record_id") is not None or before_fields:
+                raise GuardError("Bitable 创建记录不能带现有 record_id 或字段值")
+            if after_fields.get(business_key) != key_value:
+                raise GuardError("Bitable 创建记录必须写入业务主键")
+        else:
+            if len(matches) != 1:
+                raise GuardError("Bitable 更新要求业务主键唯一匹配")
+            if record.get("record_id") != matches[0]:
+                raise GuardError("Bitable 更新 record_id 与业务主键匹配结果不一致")
+            if set(before_fields) != set(after_fields):
+                raise GuardError("Bitable 更新必须逐字段展示前后值")
+            current_fields = records_by_id[matches[0]]
+            if any(
+                field not in current_fields or canonical_json(current_fields[field]) != canonical_json(value)
+                for field, value in before_fields.items()
+            ):
+                raise GuardError("Bitable 更新前字段值与当前记录不一致")
+
+        for field_name, value in after_fields.items():
+            if field_name not in field_schema:
+                raise GuardError(f"Bitable 字段不在当前字段清单中：{field_name}")
+            _validate_bitable_value(field_schema[field_name], value)
+        expected_differences = [
+            {"field": field_name, "before": before_fields.get(field_name), "after": after_fields[field_name]}
+            for field_name in sorted(after_fields)
+            if field_name not in before_fields
+            or canonical_json(before_fields[field_name]) != canonical_json(after_fields[field_name])
+        ]
+        if not expected_differences or record.get("field_differences") != expected_differences:
+            raise GuardError("Bitable 字段差异与前后值不一致")
+
+    for issue in changes["quality_issues"]:
+        if not isinstance(issue, dict) or any(
+            not isinstance(issue.get(field), str) or not issue[field].strip() for field in ("type", "detail")
+        ):
+            raise GuardError("Bitable 数据质量问题必须说明 type 和 detail")
+
+
 def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
     missing = sorted(PREVIEW_FIELDS - spec.keys())
     if missing:
@@ -291,6 +494,8 @@ def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
         _validate_docx_create(spec["scope"], spec["changes"])
     if spec["resource_type"] == "docx" and operation in DOCX_EDIT_OPERATIONS:
         _validate_docx_edit(spec["scope"], spec["before_state"], spec["changes"], spec.get("risks", []))
+    if spec["resource_type"] == "bitable":
+        _validate_bitable_record_plan(spec["scope"], spec["before_state"], spec["changes"], operation)
 
     identity = spec.get("identity", "user")
     explicit_application = bool(spec.get("application_identity_explicit", False))
@@ -362,6 +567,8 @@ def validate_preview(
         raise GuardError("目标在预览后发生变化，必须重新生成预览")
     if preview["resource_type"] == "docx" and operation in DOCX_EDIT_OPERATIONS:
         _validate_docx_edit(preview["scope"], current_state, preview["changes"], preview.get("risks", []))
+    if preview["resource_type"] == "bitable":
+        _validate_bitable_record_plan(preview["scope"], current_state, preview["changes"], operation)
 
     unavailable = missing_tools(preview.get("required_tools", []), available_tools)
     if unavailable:

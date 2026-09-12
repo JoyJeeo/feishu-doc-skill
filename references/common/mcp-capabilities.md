@@ -82,6 +82,21 @@ If a descendant-create request fails with `invalid param`, do not retry the same
 
 If node creation succeeds but content insertion fails, treat the preview as partially applied and never replay it. Reread the new document, then generate a separate preview for any corrective content write.
 
+## M3 table capability contract
+
+The 2026-09-12 metadata snapshot exposes 27 `sheets` tools and 46 `bitable` tools. Tool visibility is not permission or integration evidence.
+
+For Sheets, the visible tools can read spreadsheet metadata, list or get worksheets, and find or replace matching cells inside an exact range. No visible `mcp__feishu__sheets_` tool can read or write arbitrary range values. Therefore:
+
+- identify a spreadsheet with `mcp__feishu__sheets_v3_spreadsheet_get` and its worksheets with `mcp__feishu__sheets_v3_spreadsheetSheet_query` or `spreadsheetSheet_get`;
+- treat `spreadsheetSheet_find` and `spreadsheetSheet_replace` as a narrow find/replace path only, not as general range read/write;
+- do not claim support for FR-S02 through FR-S04, construct before/after cell matrices, or apply arbitrary cleaning and standardization until exact range-value read and write tools become visible;
+- never use another connector, browser automation, or direct OpenAPI to fill this gap.
+
+For Bitable, the visible core chain includes app metadata, paginated table and field listing, record search or batch-get, and single or batch record creation and update. Prefer `appTableRecord_search` over the historical `appTableRecord_list`. Before any record write, resolve the exact app and table, read the field schema, page through the complete business-key match set, and reject creation unless the selected key has zero matches. Updates require exactly one match. Use `client_token` on create calls when supported, keep consistency checking enabled, and reread the affected record IDs after writing.
+
+These Bitable contracts remain metadata-only until a user-authorized test resource is read and each write preview is separately confirmed.
+
 ## Missing capability response
 
 Use this result shape:

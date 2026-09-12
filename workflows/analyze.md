@@ -12,6 +12,8 @@ Use for read-only inspection, summarization, comparison, or audit.
 
 For a `docx` quality audit, read the document model and follow [docx-audit.md](docx-audit.md).
 
+For a `bitable` inspection or data-quality audit, read [../references/bitable/data-model.md](../references/bitable/data-model.md). Page through the complete table, field, and selected-record results before reporting counts or duplicates.
+
 Do not:
 
 - call a write tool;
