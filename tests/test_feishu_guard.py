@@ -24,9 +24,32 @@ def preview_spec(**overrides):
         "resource_type": "docx",
         "identity": "user",
         "operation": "replace",
-        "scope": {"block_id": "block-test"},
-        "before_state": {"text": "before"},
-        "changes": {"text": "after"},
+        "scope": {
+            "selector": {
+                "heading_block_id": "heading-test",
+                "heading_path": ["测试章节"],
+                "match_count": 1,
+            },
+            "target_block_ids": ["heading-test", "block-test", "unknown-test"],
+            "boundary": {"before": None, "after": "heading-next"},
+        },
+        "before_state": {
+            "revision_id": 1,
+            "blocks": [
+                {"block_id": "heading-test", "kind": "heading", "support": "readable"},
+                {"block_id": "block-test", "kind": "text", "support": "readable"},
+                {"block_id": "unknown-test", "kind": "unknown", "support": "opaque"},
+                {"block_id": "heading-next", "kind": "heading", "support": "readable"},
+            ],
+        },
+        "changes": {
+            "before_blocks": [{"block_id": "block-test", "kind": "text", "content": "before"}],
+            "after_blocks": [{"kind": "text", "content": "after"}],
+            "affected_block_ids": ["block-test"],
+            "preserved_block_ids": ["unknown-test"],
+            "format_fallbacks": [],
+            "pending_confirmations": [],
+        },
         "risks": [],
         "required_tools": [WRITE_TOOL, READ_TOOL],
         "verification": {"text": "after"},
@@ -141,19 +164,21 @@ class PreviewTests(unittest.TestCase):
             make_preview(preview_spec(resource_type="calendar"))
 
     def test_valid_preview_passes_preflight(self):
-        preview = make_preview(preview_spec())
+        spec = preview_spec()
+        preview = make_preview(spec)
         result = validate_preview(
             preview,
-            {"text": "before"},
+            spec["before_state"],
             preview["preview_id"],
             [READ_TOOL, WRITE_TOOL],
         )
         self.assertTrue(result["valid"])
 
     def test_wrong_confirmation_is_rejected(self):
-        preview = make_preview(preview_spec())
+        spec = preview_spec()
+        preview = make_preview(spec)
         with self.assertRaisesRegex(GuardError, "preview_id"):
-            validate_preview(preview, {"text": "before"}, "fs-wrong", [READ_TOOL, WRITE_TOOL])
+            validate_preview(preview, spec["before_state"], "fs-wrong", [READ_TOOL, WRITE_TOOL])
 
     def test_changed_target_invalidates_preview(self):
         preview = make_preview(preview_spec())
@@ -161,23 +186,26 @@ class PreviewTests(unittest.TestCase):
             validate_preview(preview, {"text": "changed"}, preview["preview_id"], [READ_TOOL, WRITE_TOOL])
 
     def test_tampered_preview_is_rejected(self):
-        preview = make_preview(preview_spec())
+        spec = preview_spec()
+        preview = make_preview(spec)
         preview["changes"] = {"text": "tampered"}
         with self.assertRaisesRegex(GuardError, "已被修改"):
-            validate_preview(preview, {"text": "before"}, preview["preview_id"], [READ_TOOL, WRITE_TOOL])
+            validate_preview(preview, spec["before_state"], preview["preview_id"], [READ_TOOL, WRITE_TOOL])
 
     def test_missing_tool_is_reported_without_fallback(self):
-        preview = make_preview(preview_spec())
+        spec = preview_spec()
+        preview = make_preview(spec)
         with self.assertRaisesRegex(GuardError, "缺少飞书 MCP 工具"):
-            validate_preview(preview, {"text": "before"}, preview["preview_id"], [READ_TOOL])
+            validate_preview(preview, spec["before_state"], preview["preview_id"], [READ_TOOL])
         self.assertEqual([WRITE_TOOL], missing_tools([READ_TOOL, WRITE_TOOL], [READ_TOOL]))
 
     def test_applied_preview_cannot_run_twice(self):
-        preview = make_preview(preview_spec())
+        spec = preview_spec(operation="append")
+        preview = make_preview(spec)
         with self.assertRaisesRegex(GuardError, "已经执行"):
             validate_preview(
                 preview,
-                {"text": "before"},
+                spec["before_state"],
                 preview["preview_id"],
                 [READ_TOOL, WRITE_TOOL],
                 [preview["preview_id"]],
@@ -186,6 +214,45 @@ class PreviewTests(unittest.TestCase):
     def test_malformed_preview_returns_guard_error(self):
         with self.assertRaisesRegex(GuardError, "预览缺少字段"):
             validate_preview({}, {}, "fs-missing", [READ_TOOL, WRITE_TOOL])
+
+    def test_docx_edit_requires_unique_section(self):
+        scope = preview_spec()["scope"]
+        scope["selector"]["match_count"] = 2
+        with self.assertRaisesRegex(GuardError, "必须唯一"):
+            make_preview(preview_spec(scope=scope))
+
+    def test_docx_edit_rejects_out_of_scope_change(self):
+        changes = preview_spec()["changes"]
+        changes["affected_block_ids"].append("heading-next")
+        with self.assertRaisesRegex(GuardError, "范围外"):
+            make_preview(preview_spec(changes=changes))
+
+    def test_docx_edit_protects_unknown_blocks(self):
+        changes = preview_spec()["changes"]
+        changes["preserved_block_ids"] = []
+        with self.assertRaisesRegex(GuardError, "原位保留"):
+            make_preview(preview_spec(changes=changes))
+
+    def test_docx_edit_discloses_format_fallback(self):
+        changes = preview_spec()["changes"]
+        changes["format_fallbacks"] = [
+            {"requested_kind": "columns", "rendered_as": "heading2", "reason": "写入工具不支持分栏"}
+        ]
+        with self.assertRaisesRegex(GuardError, "format_degradation"):
+            make_preview(preview_spec(changes=changes))
+
+        preview = make_preview(
+            preview_spec(changes=changes, risks=[{"type": "format_degradation", "detail": "分栏降级"}])
+        )
+        self.assertEqual(changes["format_fallbacks"], preview["changes"]["format_fallbacks"])
+
+    def test_docx_edit_rejects_ragged_table(self):
+        changes = preview_spec()["changes"]
+        changes["after_blocks"] = [
+            {"kind": "table", "content": {"rows": [["事项", "负责人"], ["待办"]]}}
+        ]
+        with self.assertRaisesRegex(GuardError, "列数一致"):
+            make_preview(preview_spec(changes=changes))
 
     def test_docx_create_preview_requires_and_preserves_complete_structure(self):
         spec = create_preview_spec()

@@ -70,6 +70,18 @@ Pass `useUAT: true` on every call. Use the document revision and selected block 
 
 The M1-B write must be a local text change in a dedicated test block. It must not create, delete, move, share, or change permissions on any resource. Any restoration is a separate write and therefore requires a new preview.
 
+## M2 rich document creation contract
+
+Use `mcp__feishu__docx_v1_documentBlockChildren_create` for flat first-level blocks. The currently connected MCP rejects even an exact, converter-generated minimal table through `mcp__feishu__docx_v1_documentBlockDescendant_create` with `invalid param`; treat descendant-create as unavailable until its parameter contract changes or gains a typed schema.
+
+For a table in an existing document, use a staged write instead: create the empty table through `documentBlockChildren_create`, read back its generated table-cell and default text block IDs, then prepare a separate preview to fill those text blocks with `documentBlock_patch.update_text_elements`. Empty-table creation and row-major cell filling have both passed real readback verification and user-visible forward acceptance.
+
+`mcp__feishu__docx_builtin_import` creates a new document; it does not update an existing Wiki-backed document. Do not use it as a corrective overwrite after a partially successful Wiki creation.
+
+If a descendant-create request fails with `invalid param`, do not retry the same mixed payload in smaller arbitrary batches. A verified flat text write proves only the base child-create path; it does not validate nested insertion.
+
+If node creation succeeds but content insertion fails, treat the preview as partially applied and never replay it. Reread the new document, then generate a separate preview for any corrective content write.
+
 ## Missing capability response
 
 Use this result shape:

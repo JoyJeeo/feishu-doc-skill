@@ -42,6 +42,8 @@ Read [references/common/preview-protocol.md](references/common/preview-protocol.
 
 For any `docx` content request, read [references/docx/document-model.md](references/docx/document-model.md). For a document quality audit, follow [workflows/docx-audit.md](workflows/docx-audit.md) within `analyze` mode. For new document content or a creation preview, read [references/docx/content-generation.md](references/docx/content-generation.md) and [references/docx/templates.md](references/docx/templates.md), then follow [workflows/docx-create-preview.md](workflows/docx-create-preview.md).
 
+For a section-level append, insert, replace, formatting change, or document table, read [references/docx/editing-formatting.md](references/docx/editing-formatting.md), then follow [workflows/docx-edit-preview.md](workflows/docx-edit-preview.md). The common `apply` and `verify` workflows remain mandatory after preview confirmation.
+
 ## Stop conditions
 
 Stop the affected operation without side effects when:

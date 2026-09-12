@@ -33,6 +33,17 @@ RESOURCE_TYPES = set(RESOURCE_SEGMENTS.values())
 MODES = {"analyze", "preview", "apply", "verify"}
 WRITE_OPERATIONS = {"create", "append", "insert", "replace", "move", "update"}
 DISABLED_OPERATIONS = {"delete", "transfer_owner", "public_permission_change"}
+DOCX_EDIT_OPERATIONS = {"append", "insert", "replace"}
+DOCX_BLOCK_KINDS = {f"heading{level}" for level in range(1, 10)} | {
+    "text",
+    "bullet",
+    "ordered",
+    "quote",
+    "code",
+    "table",
+    "callout",
+    "columns",
+}
 PREVIEW_FIELDS = {
     "target",
     "resource_type",
@@ -141,6 +152,122 @@ def _validate_docx_create(scope: Any, changes: Any) -> None:
         raise GuardError("docx 创建预览必须包含 changes.pending_confirmations 数组")
 
 
+def _string_list(value: Any, field: str, *, allow_empty: bool = False) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty):
+        raise GuardError(f"{field} 必须是{'可为空的' if allow_empty else '非空'}字符串数组")
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        raise GuardError(f"{field} 必须是{'可为空的' if allow_empty else '非空'}字符串数组")
+    if len(value) != len(set(value)):
+        raise GuardError(f"{field} 不能包含重复项")
+    return value
+
+
+def _validate_docx_block_plan(blocks: Any) -> None:
+    if not isinstance(blocks, list) or not blocks:
+        raise GuardError("docx 编辑预览必须包含非空 changes.after_blocks")
+    for index, block in enumerate(blocks):
+        if not isinstance(block, dict) or block.get("kind") not in DOCX_BLOCK_KINDS:
+            raise GuardError(f"changes.after_blocks[{index}] 包含不支持的块类型")
+        if block["kind"] == "table":
+            content = block.get("content")
+            rows = content.get("rows") if isinstance(content, dict) else None
+            if (
+                not isinstance(rows, list)
+                or not rows
+                or any(not isinstance(row, list) or not row for row in rows)
+                or len({len(row) for row in rows}) != 1
+                or any(not isinstance(cell, str) for row in rows for cell in row)
+            ):
+                raise GuardError("轻量表格必须包含非空且列数一致的 content.rows")
+
+
+def _validate_docx_edit(scope: Any, before_state: Any, changes: Any, risks: Any) -> None:
+    if not isinstance(scope, dict):
+        raise GuardError("docx 编辑预览必须包含结构化 scope")
+    selector = scope.get("selector")
+    if not isinstance(selector, dict):
+        raise GuardError("docx 编辑预览必须包含 scope.selector")
+    heading_id = selector.get("heading_block_id")
+    heading_path = selector.get("heading_path")
+    has_heading_id = isinstance(heading_id, str) and bool(heading_id.strip())
+    has_heading_path = (
+        isinstance(heading_path, list)
+        and bool(heading_path)
+        and all(isinstance(item, str) and item.strip() for item in heading_path)
+    )
+    if not has_heading_id and not has_heading_path:
+        raise GuardError("章节必须使用标题块 ID 或完整标题路径定位")
+    if selector.get("match_count") != 1:
+        raise GuardError("章节定位结果必须唯一")
+
+    target_ids = set(_string_list(scope.get("target_block_ids"), "scope.target_block_ids"))
+    if has_heading_id and heading_id not in target_ids:
+        raise GuardError("标题块 ID 必须包含在章节目标块中")
+    boundary = scope.get("boundary")
+    if not isinstance(boundary, dict) or not {"before", "after"}.issubset(boundary):
+        raise GuardError("docx 编辑预览必须包含前后章节边界")
+    if any(value is not None and (not isinstance(value, str) or not value.strip()) for value in boundary.values()):
+        raise GuardError("章节边界必须是块 ID 或 null")
+
+    if not isinstance(before_state, dict) or not isinstance(before_state.get("blocks"), list):
+        raise GuardError("docx 编辑预览必须保留 before_state.blocks")
+    inventory = {}
+    for block in before_state["blocks"]:
+        if not isinstance(block, dict) or not isinstance(block.get("block_id"), str):
+            raise GuardError("before_state.blocks 必须包含 block_id")
+        if block["block_id"] in inventory:
+            raise GuardError("before_state.blocks 不能包含重复 block_id")
+        inventory[block["block_id"]] = block
+    if not target_ids.issubset(inventory):
+        raise GuardError("章节目标块不完整或不在当前文档清单中")
+    boundary_ids = {value for value in boundary.values() if value is not None}
+    if not boundary_ids.issubset(inventory) or boundary_ids & target_ids:
+        raise GuardError("章节边界必须存在且位于目标章节之外")
+
+    if (
+        not isinstance(changes, dict)
+        or not isinstance(changes.get("before_blocks"), list)
+        or not changes["before_blocks"]
+    ):
+        raise GuardError("docx 编辑预览必须展示非空 changes.before_blocks")
+    _validate_docx_block_plan(changes.get("after_blocks"))
+    affected_ids = set(
+        _string_list(changes.get("affected_block_ids"), "changes.affected_block_ids", allow_empty=True)
+    )
+    if not affected_ids.issubset(target_ids):
+        raise GuardError("编辑计划包含章节范围外的块")
+
+    preserved_ids = set(
+        _string_list(changes.get("preserved_block_ids"), "changes.preserved_block_ids", allow_empty=True)
+    )
+    if not preserved_ids.issubset(target_ids):
+        raise GuardError("保留块必须位于目标章节内")
+    protected_ids = {
+        block_id
+        for block_id in target_ids
+        if inventory[block_id].get("kind") == "unknown" or inventory[block_id].get("support") == "opaque"
+    }
+    if protected_ids & affected_ids or not protected_ids.issubset(preserved_ids):
+        raise GuardError("未知或不透明块必须原位保留，不能隐式覆盖")
+
+    fallbacks = changes.get("format_fallbacks")
+    if not isinstance(fallbacks, list):
+        raise GuardError("docx 编辑预览必须包含 changes.format_fallbacks 数组")
+    for fallback in fallbacks:
+        if not isinstance(fallback, dict) or any(
+            not isinstance(fallback.get(field), str) or not fallback[field].strip()
+            for field in ("requested_kind", "rendered_as", "reason")
+        ):
+            raise GuardError("格式降级必须说明 requested_kind、rendered_as 和 reason")
+    if fallbacks and not (
+        isinstance(risks, list)
+        and any(isinstance(risk, dict) and risk.get("type") == "format_degradation" for risk in risks)
+    ):
+        raise GuardError("存在格式降级时，risks 必须包含 format_degradation")
+    if not isinstance(changes.get("pending_confirmations"), list):
+        raise GuardError("docx 编辑预览必须包含 changes.pending_confirmations 数组")
+
+
 def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
     missing = sorted(PREVIEW_FIELDS - spec.keys())
     if missing:
@@ -162,6 +289,8 @@ def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
         raise GuardError(f"不支持的写入操作：{operation}")
     if spec["resource_type"] == "docx" and operation == "create":
         _validate_docx_create(spec["scope"], spec["changes"])
+    if spec["resource_type"] == "docx" and operation in DOCX_EDIT_OPERATIONS:
+        _validate_docx_edit(spec["scope"], spec["before_state"], spec["changes"], spec.get("risks", []))
 
     identity = spec.get("identity", "user")
     explicit_application = bool(spec.get("application_identity_explicit", False))
@@ -231,6 +360,8 @@ def validate_preview(
         raise GuardError("预览内容已被修改")
     if fingerprint(current_state) != preview.get("before_fingerprint"):
         raise GuardError("目标在预览后发生变化，必须重新生成预览")
+    if preview["resource_type"] == "docx" and operation in DOCX_EDIT_OPERATIONS:
+        _validate_docx_edit(preview["scope"], current_state, preview["changes"], preview.get("risks", []))
 
     unavailable = missing_tools(preview.get("required_tools", []), available_tools)
     if unavailable:

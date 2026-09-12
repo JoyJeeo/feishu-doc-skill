@@ -27,12 +27,13 @@ Deletion, ownership transfer, and public-permission changes are not valid operat
 1. Read the target with user identity.
 2. Build the proposed change without remote mutation.
 3. Produce a preview and `preview_id`.
-4. Wait for the user to confirm that exact identifier.
-5. Reread the target and recompute its fingerprint.
-6. Invalidate the preview if the fingerprint, target, identity, scope, or required tools changed.
-7. Apply only the declared change.
-8. Reread and verify the result.
-9. Mark the preview as applied in the current task context so it cannot be applied again.
+4. If the preview contains converter-generated block IDs or another transient nested payload, persist the exact non-sensitive payload in a task-local temporary artifact before requesting confirmation. Do not rely on memory-only state across user turns.
+5. Wait for the user to confirm that exact identifier.
+6. Reread the target and recompute its fingerprint.
+7. Invalidate the preview if the fingerprint, target, identity, scope, required tools, or persisted payload changed or is unavailable.
+8. Apply only the declared change, reading transient nested arguments from the persisted artifact without reconstruction.
+9. Reread and verify the result.
+10. Mark the preview as applied in the current task context so it cannot be applied again, then remove its temporary artifact.
 
 ## Confirmation
 
