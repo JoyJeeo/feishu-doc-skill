@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
@@ -31,6 +32,99 @@ RESOURCE_SEGMENTS = {
     "mindnotes": "mindnote",
 }
 RESOURCE_TYPES = set(RESOURCE_SEGMENTS.values())
+PROJECT_SOURCE_TYPES = {"docx", "wiki", "drive", "bitable", "sheets"}
+PROJECT_CLAIM_KINDS = {"fact", "finding", "recommendation", "pending_confirmation"}
+PROJECT_RESOURCE_STATUSES = {"verified", "failed", "unattempted"}
+PROJECT_DOCUMENT_ROLES = {
+    "project_home",
+    "prd",
+    "technical_design",
+    "meeting_notes",
+    "weekly_report",
+    "retrospective",
+    "other",
+}
+PROJECT_REGISTER_SCHEMAS = {
+    "action_items": {
+        "business_key_field": "行动项编号",
+        "source_field": "来源链接",
+        "fields": [
+            {"field_name": "行动项编号", "type": 1, "ui_type": "Text"},
+            {"field_name": "事项", "type": 1, "ui_type": "Text"},
+            {"field_name": "负责人", "type": 1, "ui_type": "Text"},
+            {
+                "field_name": "状态",
+                "type": 3,
+                "ui_type": "SingleSelect",
+                "property": {
+                    "options": [
+                        {"name": "未开始"},
+                        {"name": "进行中"},
+                        {"name": "已完成"},
+                        {"name": "受阻"},
+                    ]
+                },
+            },
+            {"field_name": "截止日期", "type": 5, "ui_type": "DateTime"},
+            {"field_name": "来源链接", "type": 15, "ui_type": "Url"},
+        ],
+    },
+    "risks": {
+        "business_key_field": "风险编号",
+        "source_field": "来源链接",
+        "fields": [
+            {"field_name": "风险编号", "type": 1, "ui_type": "Text"},
+            {"field_name": "风险", "type": 1, "ui_type": "Text"},
+            {
+                "field_name": "影响",
+                "type": 3,
+                "ui_type": "SingleSelect",
+                "property": {"options": [{"name": "低"}, {"name": "中"}, {"name": "高"}]},
+            },
+            {
+                "field_name": "概率",
+                "type": 3,
+                "ui_type": "SingleSelect",
+                "property": {"options": [{"name": "低"}, {"name": "中"}, {"name": "高"}]},
+            },
+            {
+                "field_name": "状态",
+                "type": 3,
+                "ui_type": "SingleSelect",
+                "property": {
+                    "options": [{"name": "开放"}, {"name": "监控中"}, {"name": "已关闭"}]
+                },
+            },
+            {"field_name": "负责人", "type": 1, "ui_type": "Text"},
+            {"field_name": "应对措施", "type": 1, "ui_type": "Text"},
+            {"field_name": "来源链接", "type": 15, "ui_type": "Url"},
+        ],
+    },
+    "decisions": {
+        "business_key_field": "决策编号",
+        "source_field": "来源链接",
+        "fields": [
+            {"field_name": "决策编号", "type": 1, "ui_type": "Text"},
+            {"field_name": "结论", "type": 1, "ui_type": "Text"},
+            {"field_name": "原因", "type": 1, "ui_type": "Text"},
+            {"field_name": "决策人", "type": 1, "ui_type": "Text"},
+            {"field_name": "决策日期", "type": 5, "ui_type": "DateTime"},
+            {"field_name": "来源链接", "type": 15, "ui_type": "Url"},
+        ],
+    },
+    "metrics": {
+        "business_key_field": "指标编号",
+        "source_field": "来源链接",
+        "fields": [
+            {"field_name": "指标编号", "type": 1, "ui_type": "Text"},
+            {"field_name": "指标名称", "type": 1, "ui_type": "Text"},
+            {"field_name": "当前值", "type": 2, "ui_type": "Number"},
+            {"field_name": "单位", "type": 1, "ui_type": "Text"},
+            {"field_name": "状态日期", "type": 5, "ui_type": "DateTime"},
+            {"field_name": "来源链接", "type": 15, "ui_type": "Url"},
+        ],
+    },
+}
 MODES = {"analyze", "preview", "apply", "verify"}
 WRITE_OPERATIONS = {"create", "append", "insert", "replace", "copy", "move", "update"}
 DOCX_WRITE_OPERATIONS = {"create", "append", "insert", "replace"}
@@ -165,6 +259,234 @@ def validate_default_locations(config: Any) -> dict[str, Any]:
             "parent_node_token": wiki["parent_node_token"],
         },
         "drive": {"folder_token": drive["folder_token"]},
+    }
+
+
+def validate_project_audit(audit: Any) -> dict[str, Any]:
+    audit = _require_dict(audit, "项目审计")
+    project_name = _require_non_empty_str(audit.get("project_name"), "project_name")
+    as_of = _require_non_empty_str(audit.get("as_of"), "as_of")
+    try:
+        date.fromisoformat(as_of)
+    except ValueError as error:
+        raise GuardError("as_of 必须是有效的 YYYY-MM-DD 日期") from error
+
+    sources = audit.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise GuardError("sources 必须是非空数组")
+    source_ids: set[str] = set()
+    partial_source_ids: list[str] = []
+    for source in sources:
+        source = _require_dict(source, "source")
+        source_id = _require_non_empty_str(source.get("source_id"), "source.source_id")
+        if source_id in source_ids:
+            raise GuardError(f"source_id 不能重复：{source_id}")
+        source_ids.add(source_id)
+        resource_type = _require_non_empty_str(source.get("resource_type"), "source.resource_type")
+        if resource_type not in PROJECT_SOURCE_TYPES:
+            raise GuardError(f"项目审计不支持来源类型：{resource_type}")
+        url = _require_non_empty_str(source.get("url"), "source.url")
+        if classify_feishu_url(url)["resource_type"] != resource_type:
+            raise GuardError(f"来源链接与资源类型不一致：{source_id}")
+        _require_non_empty_str(source.get("title"), "source.title")
+        _require_non_empty_str(source.get("read_scope"), "source.read_scope")
+        if not isinstance(source.get("read_complete"), bool):
+            raise GuardError("source.read_complete 必须是布尔值")
+        if not source["read_complete"]:
+            _require_non_empty_str(source.get("limitation"), "source.limitation")
+            partial_source_ids.append(source_id)
+
+    claims = audit.get("claims")
+    if not isinstance(claims, list) or not claims:
+        raise GuardError("claims 必须是非空数组")
+    claim_ids: set[str] = set()
+    for claim in claims:
+        claim = _require_dict(claim, "claim")
+        claim_id = _require_non_empty_str(claim.get("claim_id"), "claim.claim_id")
+        if claim_id in claim_ids:
+            raise GuardError(f"claim_id 不能重复：{claim_id}")
+        claim_ids.add(claim_id)
+        kind = _require_non_empty_str(claim.get("kind"), "claim.kind")
+        if kind not in PROJECT_CLAIM_KINDS:
+            raise GuardError(f"不支持的项目审计结论类型：{kind}")
+        _require_non_empty_str(claim.get("category"), "claim.category")
+        _require_non_empty_str(claim.get("text"), "claim.text")
+        cited = _string_list(
+            claim.get("source_ids"),
+            "claim.source_ids",
+            allow_empty=kind == "pending_confirmation",
+        )
+        unknown = sorted(set(cited) - source_ids)
+        if unknown:
+            raise GuardError(f"结论引用了未知来源：{', '.join(unknown)}")
+
+    return {
+        "valid": True,
+        "project_name": project_name,
+        "as_of": as_of,
+        "source_count": len(sources),
+        "claim_count": len(claims),
+        "partial_source_ids": sorted(partial_source_ids),
+    }
+
+
+def validate_project_preview_plan(plan: Any) -> dict[str, Any]:
+    plan = _require_dict(plan, "项目预览计划")
+    project_name = _require_non_empty_str(plan.get("project_name"), "project_name")
+    steps = plan.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise GuardError("steps 必须是非空数组")
+
+    seen_step_ids: set[str] = set()
+    preview_ids: set[str] = set()
+    prior_steps_by_resource: dict[str, set[str]] = {}
+    for step in steps:
+        step = _require_dict(step, "step")
+        step_id = _require_non_empty_str(step.get("step_id"), "step.step_id")
+        if step_id in seen_step_ids:
+            raise GuardError(f"step_id 不能重复：{step_id}")
+        resource_key = _require_non_empty_str(step.get("resource_key"), "step.resource_key")
+        role = _require_non_empty_str(step.get("role"), "step.role")
+        if role not in PROJECT_DOCUMENT_ROLES:
+            raise GuardError(f"不支持的项目文档角色：{role}")
+        if step.get("resource_type") != "docx":
+            raise GuardError("M5-03 项目文档预览只支持 docx")
+        if step.get("operation") not in DOCX_WRITE_OPERATIONS:
+            raise GuardError("项目文档步骤只支持 create/append/insert/replace")
+
+        preview_id = _require_non_empty_str(step.get("preview_id"), "step.preview_id")
+        if not re.fullmatch(r"fs-[0-9a-f]{16}", preview_id):
+            raise GuardError("step.preview_id 格式无效")
+        if preview_id in preview_ids:
+            raise GuardError("每个资源步骤必须使用独立 preview_id")
+
+        depends_on = _string_list(step.get("depends_on"), "step.depends_on", allow_empty=True)
+        unknown_dependencies = sorted(set(depends_on) - seen_step_ids)
+        if unknown_dependencies:
+            raise GuardError(f"依赖步骤必须已在前序声明：{', '.join(unknown_dependencies)}")
+
+        source_urls = _string_list(step.get("source_urls"), "step.source_urls", allow_empty=True)
+        for url in source_urls:
+            if classify_feishu_url(url)["resource_type"] not in PROJECT_SOURCE_TYPES:
+                raise GuardError(f"项目文档不支持来源链接：{url}")
+
+        linked_resource_keys = _string_list(
+            step.get("linked_resource_keys"),
+            "step.linked_resource_keys",
+            allow_empty=True,
+        )
+        for linked_key in linked_resource_keys:
+            linked_steps = prior_steps_by_resource.get(linked_key, set())
+            if not linked_steps or not linked_steps.intersection(depends_on):
+                raise GuardError(f"链接资源必须先完成并声明直接依赖：{linked_key}")
+
+        if role == "weekly_report":
+            period = _require_dict(step.get("period"), "step.period")
+            period_start = _require_non_empty_str(period.get("start"), "step.period.start")
+            period_end = _require_non_empty_str(period.get("end"), "step.period.end")
+            try:
+                start_date = date.fromisoformat(period_start)
+                end_date = date.fromisoformat(period_end)
+            except ValueError as error:
+                raise GuardError("周报周期必须是有效的 YYYY-MM-DD 日期") from error
+            if start_date > end_date:
+                raise GuardError("周报周期开始日期不能晚于结束日期")
+
+        seen_step_ids.add(step_id)
+        preview_ids.add(preview_id)
+        prior_steps_by_resource.setdefault(resource_key, set()).add(step_id)
+
+    return {
+        "valid": True,
+        "project_name": project_name,
+        "step_count": len(steps),
+        "execution_order": [step["step_id"] for step in steps],
+    }
+
+
+def validate_project_integration(result: Any) -> dict[str, Any]:
+    result = _require_dict(result, "项目集成结果")
+    project_name = _require_non_empty_str(result.get("project_name"), "project_name")
+    resources = result.get("resources")
+    if not isinstance(resources, list) or not resources:
+        raise GuardError("resources 必须是非空数组")
+
+    statuses: dict[str, str] = {}
+    urls: dict[str, str] = {}
+    counts = {status: 0 for status in PROJECT_RESOURCE_STATUSES}
+    for resource in resources:
+        resource = _require_dict(resource, "resource")
+        resource_key = _require_non_empty_str(resource.get("resource_key"), "resource.resource_key")
+        if resource_key in statuses:
+            raise GuardError(f"resource_key 不能重复：{resource_key}")
+        resource_type = _require_non_empty_str(
+            resource.get("resource_type"), "resource.resource_type"
+        )
+        if resource_type not in PROJECT_SOURCE_TYPES:
+            raise GuardError(f"项目集成不支持资源类型：{resource_type}")
+        url = _require_non_empty_str(resource.get("url"), "resource.url")
+        if classify_feishu_url(url)["resource_type"] != resource_type:
+            raise GuardError(f"资源链接与类型不一致：{resource_key}")
+        status = _require_non_empty_str(resource.get("status"), "resource.status")
+        if status not in PROJECT_RESOURCE_STATUSES:
+            raise GuardError(f"不支持的项目资源状态：{status}")
+        if not isinstance(resource.get("read_complete"), bool):
+            raise GuardError("resource.read_complete 必须是布尔值")
+        if status == "verified" and not resource["read_complete"]:
+            raise GuardError(f"资源未完整回读，不能标记 verified：{resource_key}")
+
+        depends_on = _string_list(
+            resource.get("depends_on"), "resource.depends_on", allow_empty=True
+        )
+        unknown_dependencies = sorted(set(depends_on) - statuses.keys())
+        if unknown_dependencies:
+            raise GuardError(f"资源依赖必须已在前序声明：{', '.join(unknown_dependencies)}")
+        blocked_by = [key for key in depends_on if statuses[key] != "verified"]
+        if blocked_by and status != "unattempted":
+            raise GuardError(f"依赖未验证的资源必须标记 unattempted：{resource_key}")
+        if status in {"failed", "unattempted"}:
+            _require_non_empty_str(resource.get("reason"), "resource.reason")
+
+        statuses[resource_key] = status
+        urls[resource_key] = url
+        counts[status] += 1
+
+    links = result.get("links")
+    if not isinstance(links, list):
+        raise GuardError("links 必须是数组")
+    seen_links: set[tuple[str, str]] = set()
+    for link in links:
+        link = _require_dict(link, "link")
+        source_key = _require_non_empty_str(
+            link.get("source_resource_key"), "link.source_resource_key"
+        )
+        target_key = _require_non_empty_str(
+            link.get("target_resource_key"), "link.target_resource_key"
+        )
+        if source_key not in statuses or target_key not in statuses:
+            raise GuardError("跨资源链接引用了未知资源")
+        if source_key == target_key or (source_key, target_key) in seen_links:
+            raise GuardError("跨资源链接不能自引用或重复")
+        if statuses[source_key] != "verified" or statuses[target_key] != "verified":
+            raise GuardError("跨资源链接两端必须完成验证")
+        observed_url = _require_non_empty_str(link.get("observed_url"), "link.observed_url")
+        if observed_url != urls[target_key]:
+            raise GuardError(f"跨资源链接目标不一致：{source_key} -> {target_key}")
+        seen_links.add((source_key, target_key))
+
+    if counts["verified"] == len(resources):
+        overall_status = "complete"
+    elif counts["verified"]:
+        overall_status = "partial"
+    else:
+        overall_status = "failed"
+    return {
+        "valid": True,
+        "project_name": project_name,
+        "overall_status": overall_status,
+        "resource_count": len(resources),
+        "link_count": len(links),
+        "counts": counts,
     }
 
 
@@ -1015,6 +1337,83 @@ def _validate_bitable_record_plan(scope: Any, before_state: Any, changes: Any, o
             raise GuardError("Bitable 数据质量问题必须说明 type 和 detail")
 
 
+def _validate_project_register_table_plan(
+    scope: Any,
+    before_state: Any,
+    changes: Any,
+    verification: Any,
+    operation: str,
+) -> None:
+    if operation != "create":
+        raise GuardError("项目台账表结构预览只支持 create")
+    if not isinstance(scope, dict) or scope.get("entity") != "table":
+        raise GuardError("项目台账表结构预览必须指定 scope.entity=table")
+    app_token = _require_non_empty_str(scope.get("app_token"), "scope.app_token")
+    table_name = _require_non_empty_str(scope.get("table_name"), "scope.table_name")
+    role = _require_non_empty_str(scope.get("register_role"), "scope.register_role")
+    if role not in PROJECT_REGISTER_SCHEMAS:
+        raise GuardError(f"不支持的项目台账类型：{role}")
+
+    before_state = _require_dict(before_state, "Bitable 当前状态")
+    if before_state.get("app_token") != app_token:
+        raise GuardError("Bitable 当前状态与项目台账目标不一致")
+    if before_state.get("tables_pagination_complete") is not True:
+        raise GuardError("Bitable 数据表清单必须完成完整分页")
+    tables = before_state.get("tables")
+    if not isinstance(tables, list):
+        raise GuardError("Bitable 当前状态必须包含数据表清单")
+    table_ids: set[str] = set()
+    for table in tables:
+        table = _require_dict(table, "table")
+        table_id = _require_non_empty_str(table.get("table_id"), "table.table_id")
+        _require_non_empty_str(table.get("table_name"), "table.table_name")
+        if table_id in table_ids:
+            raise GuardError("Bitable 数据表清单包含重复 table_id")
+        table_ids.add(table_id)
+    if any(table["table_name"] == table_name for table in tables):
+        raise GuardError(f"Bitable 已存在同名项目台账：{table_name}")
+
+    changes = _require_dict(changes, "项目台账变更")
+    table_plan = _require_dict(changes.get("table"), "changes.table")
+    if table_plan.get("name") != table_name:
+        raise GuardError("项目台账名称与预览目标不一致")
+    _require_non_empty_str(table_plan.get("default_view_name"), "changes.table.default_view_name")
+    schema = PROJECT_REGISTER_SCHEMAS[role]
+    if canonical_json(table_plan.get("fields")) != canonical_json(schema["fields"]):
+        raise GuardError(f"项目台账字段契约不匹配：{role}")
+    if changes.get("business_key_field") != schema["business_key_field"]:
+        raise GuardError("项目台账业务主键与字段契约不一致")
+    if changes.get("source_field") != schema["source_field"]:
+        raise GuardError("项目台账来源字段与字段契约不一致")
+    if not isinstance(changes.get("pending_confirmations"), list):
+        raise GuardError("项目台账预览必须包含 changes.pending_confirmations 数组")
+
+    verification = _require_dict(verification, "项目台账回读计划")
+    expected_verification = {
+        "table_name": table_name,
+        "field_names": [field["field_name"] for field in schema["fields"]],
+        "business_key_field": schema["business_key_field"],
+        "source_field": schema["source_field"],
+    }
+    if verification != expected_verification:
+        raise GuardError("项目台账回读计划与字段契约不一致")
+
+
+def _validate_bitable_plan(
+    scope: Any,
+    before_state: Any,
+    changes: Any,
+    verification: Any,
+    operation: str,
+) -> None:
+    if isinstance(scope, dict) and scope.get("entity") == "table":
+        _validate_project_register_table_plan(
+            scope, before_state, changes, verification, operation
+        )
+        return
+    _validate_bitable_record_plan(scope, before_state, changes, operation)
+
+
 def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
     missing = sorted(PREVIEW_FIELDS - spec.keys())
     if missing:
@@ -1042,7 +1441,13 @@ def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
         elif operation in DOCX_EDIT_OPERATIONS:
             _validate_docx_edit(spec["scope"], spec["before_state"], spec["changes"], spec.get("risks", []))
     if spec["resource_type"] == "bitable":
-        _validate_bitable_record_plan(spec["scope"], spec["before_state"], spec["changes"], operation)
+        _validate_bitable_plan(
+            spec["scope"],
+            spec["before_state"],
+            spec["changes"],
+            spec["verification"],
+            operation,
+        )
     if spec["resource_type"] == "sheets":
         _validate_sheets_replace_plan(
             spec["scope"],
@@ -1134,7 +1539,13 @@ def validate_preview(
     )
 
     if preview["resource_type"] == "bitable":
-        _validate_bitable_record_plan(preview["scope"], current_state, preview["changes"], operation)
+        _validate_bitable_plan(
+            preview["scope"],
+            current_state,
+            preview["changes"],
+            preview["verification"],
+            operation,
+        )
     if preview["resource_type"] == "sheets":
         _validate_sheets_replace_plan(
             preview["scope"],
@@ -1194,6 +1605,15 @@ def main(argv: list[str] | None = None) -> int:
     defaults = commands.add_parser("validate-defaults")
     defaults.add_argument("config", help="JSON file path, or - for stdin")
 
+    project_audit = commands.add_parser("validate-project-audit")
+    project_audit.add_argument("audit", help="JSON file path, or - for stdin")
+
+    project_preview_plan = commands.add_parser("validate-project-preview-plan")
+    project_preview_plan.add_argument("plan", help="JSON file path, or - for stdin")
+
+    project_integration = commands.add_parser("validate-project-integration")
+    project_integration.add_argument("result", help="JSON file path, or - for stdin")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "classify-url":
@@ -1204,6 +1624,12 @@ def main(argv: list[str] | None = None) -> int:
             result = make_preview(load_json(args.spec))
         elif args.command == "validate-defaults":
             result = validate_default_locations(load_json(args.config))
+        elif args.command == "validate-project-audit":
+            result = validate_project_audit(load_json(args.audit))
+        elif args.command == "validate-project-preview-plan":
+            result = validate_project_preview_plan(load_json(args.plan))
+        elif args.command == "validate-project-integration":
+            result = validate_project_integration(load_json(args.result))
         else:
             result = validate_preview(
                 load_json(args.preview),

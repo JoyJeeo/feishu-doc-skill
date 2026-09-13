@@ -50,6 +50,14 @@ For a Sheets request, read [references/sheets/find-replace.md](references/sheets
 
 For a Wiki request, read [references/wiki/read-model.md](references/wiki/read-model.md)。若涉及 Wiki 创建、复制、移动或改名，请先读 [references/wiki/write-model.md](references/wiki/write-model.md)。For Drive folder/file lookup、metadata、协作者或公开设置查看，请读 [references/drive/read-model.md](references/drive/read-model.md)。涉及文件夹创建、文件复制/移动或文件版本更新，请改读 [references/drive/write-model.md](references/drive/write-model.md)。Use [config/default-locations.json](config/default-locations.json) only when the user does not specify a location; an explicit target always overrides it.
 
+For a cross-resource project-material inventory, source-traced status summary, or project audit, read [references/project/audit-model.md](references/project/audit-model.md) and follow [workflows/project-audit.md](workflows/project-audit.md). This path is read-only: do not turn audit findings into write previews unless the user separately requests changes.
+
+For a project home, project document set, or weekly report, read [references/project/workspace-model.md](references/project/workspace-model.md) and follow [workflows/project-workspace-preview.md](workflows/project-workspace-preview.md). Keep one preview and confirmation per resource, and do not prepare a dependent child or link-update preview until its prerequisite resource has been verified.
+
+For project action, risk, decision, or metric registers, read [references/project/register-model.md](references/project/register-model.md) and follow [workflows/project-register-preview.md](workflows/project-register-preview.md). Use one existing Bitable app and one preview-confirm-verify cycle per data table; route later record writes through the ordinary Bitable record workflow.
+
+For final cross-resource verification, read [references/project/integration-model.md](references/project/integration-model.md) and follow [workflows/project-integration-verify.md](workflows/project-integration-verify.md). Preserve failed and unattempted resources instead of promoting a partial outcome to success.
+
 ## Stop conditions
 
 Stop the affected operation without side effects when:

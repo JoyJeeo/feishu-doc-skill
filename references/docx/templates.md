@@ -26,24 +26,27 @@ Use these as minimum block-level structures, not fixed prose. The document title
 
 ## Project home
 
-1. `quote` — current project state.
+1. `quote` — current project state and `as_of` date, with a source or pending marker.
 2. `heading1` — Goal and scope.
-3. `heading1` — Status and milestones.
+3. `heading1` — Status and milestones, with source links.
 4. `heading1` — Roles and contacts.
-5. `heading1` — Key documents and links.
-6. `heading1` — Action items and risks.
-7. `heading1` — Decisions.
-8. `heading1` — Pending confirmations.
+5. `heading1` — Key documents and exact links; planned documents without resolved links remain pending.
+6. `heading1` — Action items and risks, with source links or pending markers.
+7. `heading1` — Decisions, with source links.
+8. `heading1` — Sources.
+9. `heading1` — Pending confirmations.
 
 ## Weekly report
 
-1. `quote` — weekly conclusion.
-2. `heading1` — Progress against goals.
-3. `heading1` — Metrics and evidence.
-4. `heading1` — Next-week plan.
-5. `heading1` — Risks and blockers.
-6. `heading1` — Help needed.
-7. `heading1` — Pending confirmations.
+1. `quote` — conclusion for the explicit inclusive reporting period.
+2. `heading1` — Reporting period and `as_of` date.
+3. `heading1` — Progress against goals, with source links.
+4. `heading1` — Metrics and evidence, or specific pending markers.
+5. `heading1` — Next-week plan, separated from committed work.
+6. `heading1` — Risks and blockers, with source links.
+7. `heading1` — Help needed.
+8. `heading1` — Sources.
+9. `heading1` — Pending confirmations.
 
 ## Technical design
 

@@ -18,6 +18,10 @@ For cross-resource work, create separate previews and explain their dependency o
 
 For a new `docx` document, follow [docx-create-preview.md](docx-create-preview.md).
 
+For a project home, document set, or weekly report, follow [project-workspace-preview.md](project-workspace-preview.md) before the resource-specific Docx workflow.
+
+For a project action, risk, decision, or metric register, follow [project-register-preview.md](project-register-preview.md). Create and confirm one data-table preview at a time.
+
 For Bitable record creation or updates, follow [bitable-record-preview.md](bitable-record-preview.md).
 
 For a Sheets find/replace, follow [sheets-find-replace-preview.md](sheets-find-replace-preview.md).

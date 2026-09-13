@@ -2,6 +2,8 @@
 
 Use after every write and for standalone read-only checks.
 
+For a cross-resource project workspace, also follow [project-integration-verify.md](project-integration-verify.md) and validate exact links, dependencies, and partial outcomes locally.
+
 1. Identify the expected target, identity, scope, and result.
 2. Check that the required Feishu MCP read tools are visible.
 3. Reread the target with the same identity used for the operation.

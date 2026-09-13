@@ -119,3 +119,15 @@ Drive does not expose the upload-part step between upload prepare and finish. Tr
 Drive exposes export-task creation and result lookup, but no tool to download the exported file. A successful task plus file metadata proves only task generation, not file usability or content integrity. Do not report full export verification or completion without a supported download-and-open check.
 
 Member deletion, file deletion, version deletion, ownership transfer, and public-permission mutations remain disabled even though some tools are visible. Use `useUAT: true` explicitly and preserve the common preview, conflict, and verification requirements for every allowed mutation.
+
+## M5 project-workspace capability contract
+
+The 2026-09-13 metadata check still exposes 21 `docx`, 27 `sheets`, 46 `bitable`, 16 `wiki`, and 52 `drive` tools. M5 composes these existing resource contracts; it does not introduce another transport or treat cross-resource work as one atomic write.
+
+- Use Wiki nodes for the project directory and Docx documents for the project home, document set, and weekly reports. Use the already verified flat Docx block creation path and preserve exact source URLs in generated content.
+- Use Bitable for action, risk, decision, and metric registers. Existing-table metadata, field, and record reads plus record create/update have real evidence. Create project registers only inside an exactly resolved existing app, one independent table preview at a time; verify the returned table and full field list before creating another. `appTable_create` has passed forward testing and user acceptance for all four register roles using Text, Number, SingleSelect, DateTime, and Url fields. `app_create` and standalone `appTableField_create` remain outside this verified path.
+- Use Drive only for exact folder/file lookup, metadata, and supported archive operations. Folder listing is not global project search.
+- Do not use Sheets for M5 metric values: the visible Sheets tools still cannot read or write arbitrary ranges. Exact find/replace remains the only supported cell-content path.
+- Minutes remains outside the roadmap under D-021.
+
+Read every input resource completely within its supported contract before deriving project state. Keep source facts, derived findings, recommendations, and pending confirmations distinct, and attach exact resource links to facts and status claims. For writes, create one preview per resource, declare dependencies, and stop dependent operations after any prerequisite failure. Verify each resource independently before reporting the whole workspace result.

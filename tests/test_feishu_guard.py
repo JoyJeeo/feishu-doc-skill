@@ -11,6 +11,9 @@ from scripts.feishu_guard import (
     validate_feishu_tool,
     validate_mode,
     validate_preview,
+    validate_project_audit,
+    validate_project_integration,
+    validate_project_preview_plan,
 )
 
 
@@ -21,6 +24,9 @@ CREATE_BLOCKS_TOOL = "mcp__feishu__docx_v1_documentBlockChildren_create"
 BITABLE_READ_TOOL = "mcp__feishu__bitable_v1_appTableRecord_search"
 BITABLE_CREATE_TOOL = "mcp__feishu__bitable_v1_appTableRecord_create"
 BITABLE_UPDATE_TOOL = "mcp__feishu__bitable_v1_appTableRecord_update"
+BITABLE_TABLE_LIST_TOOL = "mcp__feishu__bitable_v1_appTable_list"
+BITABLE_TABLE_CREATE_TOOL = "mcp__feishu__bitable_v1_appTable_create"
+BITABLE_FIELD_LIST_TOOL = "mcp__feishu__bitable_v1_appTableField_list"
 SHEETS_FIND_TOOL = "mcp__feishu__sheets_v3_spreadsheetSheet_find"
 SHEETS_REPLACE_TOOL = "mcp__feishu__sheets_v3_spreadsheetSheet_replace"
 WIKI_CREATE_TOOL = "mcp__feishu__wiki_v2_spaceNode_create"
@@ -170,6 +176,128 @@ def bitable_preview_spec(operation="create", **overrides):
             BITABLE_CREATE_TOOL if operation == "create" else BITABLE_UPDATE_TOOL,
         ],
         "verification": {"business_keys": [records[0]["business_key_value"]]},
+    }
+    spec.update(overrides)
+    return spec
+
+
+def project_register_preview_spec(role="action_items", **overrides):
+    contracts = {
+        "action_items": (
+            "M5 行动项",
+            "行动项编号",
+            [
+                {"field_name": "行动项编号", "type": 1, "ui_type": "Text"},
+                {"field_name": "事项", "type": 1, "ui_type": "Text"},
+                {"field_name": "负责人", "type": 1, "ui_type": "Text"},
+                {
+                    "field_name": "状态",
+                    "type": 3,
+                    "ui_type": "SingleSelect",
+                    "property": {
+                        "options": [
+                            {"name": "未开始"},
+                            {"name": "进行中"},
+                            {"name": "已完成"},
+                            {"name": "受阻"},
+                        ]
+                    },
+                },
+                {"field_name": "截止日期", "type": 5, "ui_type": "DateTime"},
+                {"field_name": "来源链接", "type": 15, "ui_type": "Url"},
+            ],
+        ),
+        "risks": (
+            "M5 风险",
+            "风险编号",
+            [
+                {"field_name": "风险编号", "type": 1, "ui_type": "Text"},
+                {"field_name": "风险", "type": 1, "ui_type": "Text"},
+                {
+                    "field_name": "影响",
+                    "type": 3,
+                    "ui_type": "SingleSelect",
+                    "property": {"options": [{"name": "低"}, {"name": "中"}, {"name": "高"}]},
+                },
+                {
+                    "field_name": "概率",
+                    "type": 3,
+                    "ui_type": "SingleSelect",
+                    "property": {"options": [{"name": "低"}, {"name": "中"}, {"name": "高"}]},
+                },
+                {
+                    "field_name": "状态",
+                    "type": 3,
+                    "ui_type": "SingleSelect",
+                    "property": {
+                        "options": [{"name": "开放"}, {"name": "监控中"}, {"name": "已关闭"}]
+                    },
+                },
+                {"field_name": "负责人", "type": 1, "ui_type": "Text"},
+                {"field_name": "应对措施", "type": 1, "ui_type": "Text"},
+                {"field_name": "来源链接", "type": 15, "ui_type": "Url"},
+            ],
+        ),
+        "decisions": (
+            "M5 决策",
+            "决策编号",
+            [
+                {"field_name": "决策编号", "type": 1, "ui_type": "Text"},
+                {"field_name": "结论", "type": 1, "ui_type": "Text"},
+                {"field_name": "原因", "type": 1, "ui_type": "Text"},
+                {"field_name": "决策人", "type": 1, "ui_type": "Text"},
+                {"field_name": "决策日期", "type": 5, "ui_type": "DateTime"},
+                {"field_name": "来源链接", "type": 15, "ui_type": "Url"},
+            ],
+        ),
+        "metrics": (
+            "M5 指标",
+            "指标编号",
+            [
+                {"field_name": "指标编号", "type": 1, "ui_type": "Text"},
+                {"field_name": "指标名称", "type": 1, "ui_type": "Text"},
+                {"field_name": "当前值", "type": 2, "ui_type": "Number"},
+                {"field_name": "单位", "type": 1, "ui_type": "Text"},
+                {"field_name": "状态日期", "type": 5, "ui_type": "DateTime"},
+                {"field_name": "来源链接", "type": 15, "ui_type": "Url"},
+            ],
+        ),
+    }
+    table_name, business_key, fields = contracts[role]
+    spec = {
+        "target": "https://example.feishu.cn/base/bascnProject",
+        "resource_type": "bitable",
+        "identity": "user",
+        "operation": "create",
+        "scope": {
+            "entity": "table",
+            "app_token": "bascnProject",
+            "register_role": role,
+            "table_name": table_name,
+        },
+        "before_state": {
+            "app_token": "bascnProject",
+            "tables_pagination_complete": True,
+            "tables": [{"table_id": "tblExisting", "table_name": "Table"}],
+        },
+        "changes": {
+            "table": {"name": table_name, "default_view_name": "全部记录", "fields": fields},
+            "business_key_field": business_key,
+            "source_field": "来源链接",
+            "pending_confirmations": [],
+        },
+        "risks": [],
+        "required_tools": [
+            BITABLE_TABLE_LIST_TOOL,
+            BITABLE_TABLE_CREATE_TOOL,
+            BITABLE_FIELD_LIST_TOOL,
+        ],
+        "verification": {
+            "table_name": table_name,
+            "field_names": [field["field_name"] for field in fields],
+            "business_key_field": business_key,
+            "source_field": "来源链接",
+        },
     }
     spec.update(overrides)
     return spec
@@ -637,6 +765,247 @@ class DefaultLocationTests(unittest.TestCase):
                 validate_default_locations(config)
 
 
+class ProjectAuditTests(unittest.TestCase):
+    def audit(self):
+        return {
+            "project_name": "M5 验收项目",
+            "as_of": "2026-09-13",
+            "sources": [
+                {
+                    "source_id": "SRC-001",
+                    "resource_type": "docx",
+                    "url": "https://example.feishu.cn/docx/doccnProject",
+                    "title": "项目主页",
+                    "read_scope": "完整文档块",
+                    "read_complete": True,
+                },
+                {
+                    "source_id": "SRC-002",
+                    "resource_type": "bitable",
+                    "url": "https://example.feishu.cn/base/bascnProject",
+                    "title": "行动项台账",
+                    "read_scope": "项目行动项筛选结果",
+                    "read_complete": False,
+                    "limitation": "仅有第一页，不能证明记录总数",
+                },
+            ],
+            "claims": [
+                {
+                    "claim_id": "CLM-001",
+                    "kind": "fact",
+                    "category": "status",
+                    "text": "项目主页存在",
+                    "source_ids": ["SRC-001"],
+                },
+                {
+                    "claim_id": "CLM-002",
+                    "kind": "pending_confirmation",
+                    "category": "action",
+                    "text": "行动项总数待确认",
+                    "source_ids": [],
+                },
+            ],
+        }
+
+    def test_accepts_source_traced_audit_and_reports_partial_sources(self):
+        result = validate_project_audit(self.audit())
+        self.assertEqual(2, result["source_count"])
+        self.assertEqual(2, result["claim_count"])
+        self.assertEqual(["SRC-002"], result["partial_source_ids"])
+
+    def test_rejects_unsourced_or_unknown_claims(self):
+        audit = self.audit()
+        audit["claims"][0]["source_ids"] = []
+        with self.assertRaisesRegex(GuardError, "非空"):
+            validate_project_audit(audit)
+
+        audit = self.audit()
+        audit["claims"][0]["source_ids"] = ["SRC-999"]
+        with self.assertRaisesRegex(GuardError, "未知来源"):
+            validate_project_audit(audit)
+
+    def test_rejects_mismatched_source_or_undisclosed_partial_read(self):
+        audit = self.audit()
+        audit["sources"][0]["resource_type"] = "wiki"
+        with self.assertRaisesRegex(GuardError, "资源类型不一致"):
+            validate_project_audit(audit)
+
+        audit = self.audit()
+        audit["sources"][1].pop("limitation")
+        with self.assertRaisesRegex(GuardError, "limitation"):
+            validate_project_audit(audit)
+
+
+class ProjectPreviewPlanTests(unittest.TestCase):
+    def plan(self):
+        return {
+            "project_name": "M5 验收项目",
+            "steps": [
+                {
+                    "step_id": "STEP-001",
+                    "resource_key": "HOME",
+                    "role": "project_home",
+                    "resource_type": "docx",
+                    "operation": "create",
+                    "preview_id": "fs-1111111111111111",
+                    "depends_on": [],
+                    "source_urls": ["https://example.feishu.cn/wiki/wikiProject"],
+                    "linked_resource_keys": [],
+                },
+                {
+                    "step_id": "STEP-002",
+                    "resource_key": "PRD",
+                    "role": "prd",
+                    "resource_type": "docx",
+                    "operation": "create",
+                    "preview_id": "fs-2222222222222222",
+                    "depends_on": ["STEP-001"],
+                    "source_urls": ["https://example.feishu.cn/docx/doccnSource"],
+                    "linked_resource_keys": [],
+                },
+                {
+                    "step_id": "STEP-003",
+                    "resource_key": "WEEKLY",
+                    "role": "weekly_report",
+                    "resource_type": "docx",
+                    "operation": "create",
+                    "preview_id": "fs-3333333333333333",
+                    "depends_on": ["STEP-001"],
+                    "source_urls": ["https://example.feishu.cn/base/bascnSource"],
+                    "linked_resource_keys": [],
+                    "period": {"start": "2026-09-07", "end": "2026-09-13"},
+                },
+                {
+                    "step_id": "STEP-004",
+                    "resource_key": "HOME",
+                    "role": "project_home",
+                    "resource_type": "docx",
+                    "operation": "replace",
+                    "preview_id": "fs-4444444444444444",
+                    "depends_on": ["STEP-002", "STEP-003"],
+                    "source_urls": [],
+                    "linked_resource_keys": ["PRD", "WEEKLY"],
+                },
+            ],
+        }
+
+    def test_accepts_independent_previews_in_dependency_order(self):
+        result = validate_project_preview_plan(self.plan())
+        self.assertEqual(4, result["step_count"])
+        self.assertEqual(["STEP-001", "STEP-002", "STEP-003", "STEP-004"], result["execution_order"])
+
+    def test_rejects_reused_preview_or_forward_dependency(self):
+        plan = self.plan()
+        plan["steps"][1]["preview_id"] = plan["steps"][0]["preview_id"]
+        with self.assertRaisesRegex(GuardError, "独立 preview_id"):
+            validate_project_preview_plan(plan)
+
+        plan = self.plan()
+        plan["steps"][0]["depends_on"] = ["STEP-002"]
+        with self.assertRaisesRegex(GuardError, "前序"):
+            validate_project_preview_plan(plan)
+
+    def test_requires_link_targets_and_valid_weekly_period(self):
+        plan = self.plan()
+        plan["steps"][3]["depends_on"] = ["STEP-002"]
+        with self.assertRaisesRegex(GuardError, "链接资源"):
+            validate_project_preview_plan(plan)
+
+        plan = self.plan()
+        plan["steps"][2]["period"] = {"start": "2026-09-14", "end": "2026-09-13"}
+        with self.assertRaisesRegex(GuardError, "不能晚于"):
+            validate_project_preview_plan(plan)
+
+
+class ProjectIntegrationTests(unittest.TestCase):
+    def result(self):
+        return {
+            "project_name": "M5 验收项目",
+            "resources": [
+                {
+                    "resource_key": "HOME",
+                    "resource_type": "wiki",
+                    "url": "https://example.feishu.cn/wiki/wikiHome",
+                    "status": "verified",
+                    "read_complete": True,
+                    "depends_on": [],
+                },
+                {
+                    "resource_key": "ACTION",
+                    "resource_type": "bitable",
+                    "url": "https://example.feishu.cn/base/baseAction",
+                    "status": "verified",
+                    "read_complete": True,
+                    "depends_on": [],
+                },
+            ],
+            "links": [
+                {
+                    "source_resource_key": "HOME",
+                    "target_resource_key": "ACTION",
+                    "observed_url": "https://example.feishu.cn/base/baseAction",
+                }
+            ],
+        }
+
+    def test_accepts_complete_resources_and_exact_links(self):
+        result = validate_project_integration(self.result())
+        self.assertEqual("complete", result["overall_status"])
+        self.assertEqual(2, result["resource_count"])
+        self.assertEqual(1, result["link_count"])
+
+    def test_partial_failure_keeps_dependent_resource_unattempted(self):
+        result = self.result()
+        result["resources"].extend(
+            [
+                {
+                    "resource_key": "WEEKLY",
+                    "resource_type": "wiki",
+                    "url": "https://example.feishu.cn/wiki/wikiWeekly",
+                    "status": "failed",
+                    "read_complete": False,
+                    "depends_on": ["HOME"],
+                    "reason": "写入失败",
+                },
+                {
+                    "resource_key": "SUMMARY",
+                    "resource_type": "wiki",
+                    "url": "https://example.feishu.cn/wiki/wikiSummary",
+                    "status": "unattempted",
+                    "read_complete": False,
+                    "depends_on": ["WEEKLY"],
+                    "reason": "前置周报未验证",
+                },
+            ]
+        )
+        validated = validate_project_integration(result)
+        self.assertEqual("partial", validated["overall_status"])
+        self.assertEqual(1, validated["counts"]["failed"])
+        self.assertEqual(1, validated["counts"]["unattempted"])
+
+    def test_rejects_verified_dependent_or_wrong_link(self):
+        result = self.result()
+        result["resources"][1].update(
+            status="failed", read_complete=False, reason="读取失败"
+        )
+        result["resources"].append(
+            {
+                "resource_key": "SUMMARY",
+                "resource_type": "wiki",
+                "url": "https://example.feishu.cn/wiki/wikiSummary",
+                "status": "verified",
+                "read_complete": True,
+                "depends_on": ["ACTION"],
+            }
+        )
+        with self.assertRaisesRegex(GuardError, "unattempted"):
+            validate_project_integration(result)
+
+        result = self.result()
+        result["links"][0]["observed_url"] = "https://example.feishu.cn/base/wrong"
+        with self.assertRaisesRegex(GuardError, "目标不一致"):
+            validate_project_integration(result)
+
 class PreviewTests(unittest.TestCase):
     def test_preview_is_deterministic_and_complete(self):
         first = make_preview(preview_spec())
@@ -854,6 +1223,46 @@ class PreviewTests(unittest.TestCase):
 
         with self.assertRaisesRegex(GuardError, "同时成功和失败"):
             summarize_batch_outcomes(["P-001"], ["P-001"], {"P-001": "冲突"})
+
+    def test_project_register_table_contracts_are_previewable(self):
+        preview_ids = set()
+        for role in ("action_items", "risks", "decisions", "metrics"):
+            with self.subTest(role=role):
+                spec = project_register_preview_spec(role)
+                preview = make_preview(spec)
+                result = validate_preview(
+                    preview,
+                    spec["before_state"],
+                    preview["preview_id"],
+                    spec["required_tools"],
+                )
+                self.assertTrue(result["valid"])
+                preview_ids.add(preview["preview_id"])
+        self.assertEqual(4, len(preview_ids))
+
+    def test_project_register_table_requires_complete_unique_target(self):
+        spec = project_register_preview_spec()
+        spec["before_state"]["tables_pagination_complete"] = False
+        with self.assertRaisesRegex(GuardError, "完整分页"):
+            make_preview(spec)
+
+        spec = project_register_preview_spec()
+        spec["before_state"]["tables"].append(
+            {"table_id": "tblConflict", "table_name": "M5 行动项"}
+        )
+        with self.assertRaisesRegex(GuardError, "同名"):
+            make_preview(spec)
+
+    def test_project_register_table_rejects_schema_or_verification_drift(self):
+        spec = project_register_preview_spec("metrics")
+        spec["changes"]["table"]["fields"][2]["ui_type"] = "Text"
+        with self.assertRaisesRegex(GuardError, "字段契约"):
+            make_preview(spec)
+
+        spec = project_register_preview_spec("metrics")
+        spec["verification"]["business_key_field"] = "指标名称"
+        with self.assertRaisesRegex(GuardError, "回读计划"):
+            make_preview(spec)
 
     def test_sheets_replace_preview_is_range_bound_and_deterministic(self):
         spec = sheets_preview_spec()

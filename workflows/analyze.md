@@ -20,6 +20,10 @@ For a `wiki` inspection, read [../references/wiki/read-model.md](../references/w
 
 For a Drive folder, file lookup, metadata, collaborator, or public-permission inspection, read [../references/drive/read-model.md](../references/drive/read-model.md). Search only inside one exact folder, page the complete listing when pagination is supported, and distinguish folder-list evidence from exact metadata and permission evidence.
 
+For a cross-resource project inventory, status summary, or audit, read [../references/project/audit-model.md](../references/project/audit-model.md) and follow [project-audit.md](project-audit.md). Validate the evidence map locally before reporting facts or findings.
+
+For action, risk, decision, or metric register inspection, also read [../references/project/register-model.md](../references/project/register-model.md). Apply its role-specific field and business-key contract without changing the table.
+
 Do not:
 
 - call a write tool;
