@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,9 +32,23 @@ RESOURCE_SEGMENTS = {
 }
 RESOURCE_TYPES = set(RESOURCE_SEGMENTS.values())
 MODES = {"analyze", "preview", "apply", "verify"}
-WRITE_OPERATIONS = {"create", "append", "insert", "replace", "move", "update"}
+WRITE_OPERATIONS = {"create", "append", "insert", "replace", "copy", "move", "update"}
+DOCX_WRITE_OPERATIONS = {"create", "append", "insert", "replace"}
 DISABLED_OPERATIONS = {"delete", "transfer_owner", "public_permission_change"}
 DOCX_EDIT_OPERATIONS = {"append", "insert", "replace"}
+WIKI_WRITE_OPERATIONS = {"create", "copy", "move", "update"}
+WIKI_IMPORT_SOURCE_TYPES = {"doc", "sheet", "bitable", "mindnote", "docx", "file", "slides"}
+DRIVE_WRITE_OPERATIONS = {"create", "copy", "move", "update"}
+DRIVE_COPY_SOURCE_TYPES = {"file", "doc", "sheet", "bitable", "docx", "mindnote", "slides"}
+DRIVE_MOVE_SOURCE_TYPES = DRIVE_COPY_SOURCE_TYPES | {"folder"}
+DRIVE_VERSION_SOURCE_TYPES = {"docx", "sheet"}
+DRIVE_EXPORT_FORMATS = {
+    "doc": {"docx", "pdf"},
+    "docx": {"docx", "pdf"},
+    "sheet": {"xlsx"},
+    "bitable": {"xlsx"},
+}
+DRIVE_IMPORT_FORMATS = {"docx": {"docx"}}
 DOCX_BLOCK_KINDS = {f"heading{level}" for level in range(1, 10)} | {
     "text",
     "bullet",
@@ -52,6 +67,8 @@ BITABLE_READ_ONLY_FIELD_TYPES = {
     "ModifiedUser",
     "AutoNumber",
 }
+SHEETS_RANGE_RE = re.compile(r"^([^!]+)!([A-Z]+)([1-9]\d*):([A-Z]+)([1-9]\d*)$")
+SHEETS_CELL_RE = re.compile(r"^([^!]+)!([A-Z]+)([1-9]\d*)$")
 PREVIEW_FIELDS = {
     "target",
     "resource_type",
@@ -130,6 +147,27 @@ def missing_tools(required: Iterable[str], available: Iterable[str]) -> list[str
     return sorted(required_set - set(available))
 
 
+def validate_default_locations(config: Any) -> dict[str, Any]:
+    if not isinstance(config, dict):
+        raise GuardError("默认位置配置必须是对象")
+    wiki = config.get("wiki")
+    drive = config.get("drive")
+    if not isinstance(wiki, dict) or any(
+        not isinstance(wiki.get(field), str) or not wiki[field].strip()
+        for field in ("space_id", "parent_node_token")
+    ):
+        raise GuardError("默认 Wiki 位置必须包含 space_id 和 parent_node_token")
+    if not isinstance(drive, dict) or not isinstance(drive.get("folder_token"), str):
+        raise GuardError("默认 Drive 位置必须包含字符串 folder_token，空字符串表示根目录")
+    return {
+        "wiki": {
+            "space_id": wiki["space_id"],
+            "parent_node_token": wiki["parent_node_token"],
+        },
+        "drive": {"folder_token": drive["folder_token"]},
+    }
+
+
 def _preview_payload(preview: dict[str, Any]) -> dict[str, Any]:
     return {
         "target": preview["target"],
@@ -170,6 +208,376 @@ def _string_list(value: Any, field: str, *, allow_empty: bool = False) -> list[s
     return value
 
 
+def _require_non_empty_str(value: Any, field: str, *, allow_empty: bool = False) -> str:
+    if not isinstance(value, str):
+        raise GuardError(f"{field} 必须是字符串")
+    if value == "":
+        if allow_empty:
+            return value
+        raise GuardError(f"{field} 不能为空")
+    if not value.strip():
+        raise GuardError(f"{field} 不能是空白字符串")
+    return value
+
+
+def _require_dict(value: Any, field: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise GuardError(f"{field} 必须是对象")
+    return value
+
+
+def _collect_named_children(
+    items: Any,
+    field: str,
+    token_field: str,
+    *,
+    title_field: str = "title",
+    allow_empty_titles: bool = False,
+) -> tuple[set[str], set[str]]:
+    if not isinstance(items, list):
+        raise GuardError(f"{field} 必须是数组")
+    titles = set()
+    tokens = set()
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise GuardError(f"{field}[{index}] 必须是对象")
+        token = _require_non_empty_str(item.get(token_field), f"{field}[{index}].{token_field}")
+        title = item.get(title_field)
+        if not (allow_empty_titles and title == ""):
+            title = _require_non_empty_str(title, f"{field}[{index}].{title_field}")
+        if token in tokens:
+            raise GuardError(f"{field} 包含重复 token")
+        if title and title in titles:
+            raise GuardError(f"{field} 包含重复标题")
+        tokens.add(token)
+        if title:
+            titles.add(title)
+    return titles, tokens
+
+
+def _validate_wiki_plan(scope: Any, before_state: Any, changes: Any, operation: str) -> None:
+    if operation not in WIKI_WRITE_OPERATIONS:
+        raise GuardError("Wiki 写预览只支持 create/copy/move/update")
+    scope = _require_dict(scope, "scope")
+    before_state = _require_dict(before_state, "before_state")
+    changes = _require_dict(changes, "changes")
+    if not isinstance(changes.get("pending_confirmations"), list):
+        raise GuardError("Wiki 预览必须包含 changes.pending_confirmations 数组")
+
+    space_id = _require_non_empty_str(scope.get("space_id"), "scope.space_id")
+    if before_state.get("space_id") != space_id:
+        raise GuardError("Wiki 当前状态中的 space_id 与 scope 不一致")
+
+    if operation == "move" and scope.get("entity") == "drive_document":
+        source_token = _require_non_empty_str(scope.get("source_token"), "scope.source_token")
+        source_type = _require_non_empty_str(scope.get("source_type"), "scope.source_type")
+        if source_type not in WIKI_IMPORT_SOURCE_TYPES:
+            raise GuardError(f"Wiki 文档入库不支持源类型 {source_type}")
+        source_parent_token = _require_non_empty_str(
+            scope.get("source_parent_folder_token"), "scope.source_parent_folder_token"
+        )
+        target_parent_token = _require_non_empty_str(
+            scope.get("target_parent_node_token"), "scope.target_parent_node_token"
+        )
+        source = _require_dict(before_state.get("source_document"), "before_state.source_document")
+        target_parent = _require_dict(before_state.get("target_parent"), "before_state.target_parent")
+        if source.get("token") != source_token or source.get("type") != source_type:
+            raise GuardError("Wiki 文档入库的源 token/type 与当前状态不一致")
+        if source.get("parent_folder_token") != source_parent_token:
+            raise GuardError("Wiki 文档入库的源目录与当前状态不一致")
+        source_title = _require_non_empty_str(source.get("title"), "before_state.source_document.title")
+        if target_parent.get("space_id") != space_id:
+            raise GuardError("Wiki 文档入库的目标 space_id 与当前状态不一致")
+        if target_parent.get("parent_node_token") != target_parent_token:
+            raise GuardError("Wiki 文档入库的目标父节点与当前状态不一致")
+        child_titles, _ = _collect_named_children(
+            target_parent.get("children", []),
+            "before_state.target_parent.children",
+            "node_token",
+            title_field="title",
+        )
+        if source_title in child_titles:
+            raise GuardError("目标父节点已有同名子节点")
+        expected_arguments = {
+            "path": {"space_id": space_id},
+            "data": {
+                "obj_token": source_token,
+                "obj_type": source_type,
+                "parent_wiki_token": target_parent_token,
+                "apply": False,
+            },
+            "useUAT": True,
+        }
+        if changes.get("apply_arguments") != expected_arguments:
+            raise GuardError("Wiki 文档入库调用参数与预览范围不一致")
+        return
+
+    if operation == "create":
+        parent_node_token = _require_non_empty_str(scope.get("parent_node_token"), "scope.parent_node_token")
+        if before_state.get("parent_node_token") != parent_node_token:
+            raise GuardError("Wiki 创建预览的父节点与当前状态不一致")
+        _require_non_empty_str(changes.get("title"), "changes.title")
+        _require_non_empty_str(changes.get("node_type"), "changes.node_type")
+        child_titles, _ = _collect_named_children(
+            before_state.get("children", []),
+            "before_state.children",
+            "node_token",
+            title_field="title",
+        )
+        if _require_non_empty_str(changes.get("title"), "changes.title") in child_titles:
+            raise GuardError("目标父节点已有同名子节点")
+        return
+
+    if operation == "update":
+        node_token = _require_non_empty_str(scope.get("node_token"), "scope.node_token")
+        parent_node_token = _require_non_empty_str(scope.get("parent_node_token"), "scope.parent_node_token")
+        node = _require_dict(before_state.get("node"), "before_state.node")
+        if node.get("node_token") != node_token:
+            raise GuardError("scope.node_token 与 before_state 不一致")
+        if node.get("parent_node_token") != parent_node_token:
+            raise GuardError("scope.parent_node_token 与 before_state 不一致")
+        new_title = _require_non_empty_str(changes.get("title"), "changes.title")
+        if new_title == _require_non_empty_str(node.get("title"), "before_state.node.title"):
+            raise GuardError("Wiki 标题未发生变化")
+        return
+
+    if operation not in {"move", "copy"}:
+        raise GuardError("Wiki 写预览只支持 create/copy/move/update")
+
+    source_node_token = _require_non_empty_str(scope.get("source_node_token"), "scope.source_node_token")
+    source_parent_token = _require_non_empty_str(scope.get("source_parent_node_token"), "scope.source_parent_node_token")
+    target_parent_token = _require_non_empty_str(scope.get("target_parent_node_token"), "scope.target_parent_node_token")
+    source_node = _require_dict(before_state.get("source_node"), "before_state.source_node")
+    target_parent = _require_dict(before_state.get("target_parent"), "before_state.target_parent")
+    if source_node.get("space_id") and source_node.get("space_id") != space_id:
+        raise GuardError("Wiki 源节点 space_id 与 scope 不一致")
+    if source_node.get("node_token") != source_node_token:
+        raise GuardError("scope.source_node_token 与 before_state 不一致")
+    if source_node.get("parent_node_token") != source_parent_token:
+        raise GuardError("scope.source_parent_node_token 与 before_state 不一致")
+
+    _require_non_empty_str(source_node.get("node_type"), "before_state.source_node.node_type")
+    if target_parent.get("space_id") and target_parent.get("space_id") != space_id:
+        raise GuardError("目标父节点 space_id 与 scope 不一致")
+    if target_parent.get("parent_node_token") != target_parent_token:
+        raise GuardError("scope.target_parent_node_token 与 before_state 不一致")
+
+    title = changes.get("title", source_node.get("title"))
+    if title is None:
+        raise GuardError("changes.title 或 before_state.source_node.title 必须存在")
+    title = _require_non_empty_str(title, "changes.title")
+    child_titles, _ = _collect_named_children(
+        target_parent.get("children", []),
+        "before_state.target_parent.children",
+        "node_token",
+        title_field="title",
+    )
+    if operation == "move" and source_parent_token == target_parent_token and title == source_node.get("title"):
+        raise GuardError("Wiki 移动预览目标未发生变化")
+    if title != source_node.get("title") and title in child_titles:
+        raise GuardError("目标父节点已有同名子节点")
+    if title == source_node.get("title") and operation == "copy" and title in child_titles:
+        raise GuardError("目标父节点已有同名子节点")
+
+
+def _validate_drive_plan(scope: Any, before_state: Any, changes: Any, operation: str) -> None:
+    if operation not in DRIVE_WRITE_OPERATIONS:
+        raise GuardError("Drive 写预览只支持 create/copy/move/update")
+    scope = _require_dict(scope, "scope")
+    before_state = _require_dict(before_state, "before_state")
+    changes = _require_dict(changes, "changes")
+    if not isinstance(changes.get("pending_confirmations"), list):
+        raise GuardError("Drive 预览必须包含 changes.pending_confirmations 数组")
+
+    if operation == "create" and scope.get("entity") == "import_task":
+        source_file_token = _require_non_empty_str(scope.get("source_file_token"), "scope.source_file_token")
+        file_extension = _require_non_empty_str(scope.get("file_extension"), "scope.file_extension")
+        target_type = _require_non_empty_str(scope.get("target_type"), "scope.target_type")
+        target_folder_token = _require_non_empty_str(
+            scope.get("target_folder_token"), "scope.target_folder_token"
+        )
+        if target_type not in DRIVE_IMPORT_FORMATS.get(file_extension, set()):
+            raise GuardError(f"Drive 不支持将 {file_extension} 导入为 {target_type}")
+        source_file = _require_dict(before_state.get("source_file"), "before_state.source_file")
+        if source_file.get("token") != source_file_token or source_file.get("file_extension") != file_extension:
+            raise GuardError("Drive 导入的源文件 token/扩展名与当前状态不一致")
+        source_provenance = _require_non_empty_str(
+            source_file.get("provenance"), "before_state.source_file.provenance"
+        )
+        if source_provenance == "export_task":
+            raise GuardError("Drive 导出任务返回的文件 token 不能直接用于导入")
+        if source_provenance not in {"file_upload", "media_upload", "existing_drive_file"}:
+            raise GuardError("Drive 导入源文件缺少可验证的上传或现有文件来源")
+        if source_file.get("type") != "file":
+            raise GuardError("Drive 导入源必须是普通 file 类型")
+        file_name = _require_non_empty_str(source_file.get("file_name"), "before_state.source_file.file_name")
+        if not file_name.lower().endswith(f".{file_extension.lower()}"):
+            raise GuardError("Drive 导入源文件名后缀与扩展名不一致")
+        file_size = source_file.get("file_size")
+        if source_provenance == "existing_drive_file":
+            if file_size is not None and (not isinstance(file_size, int) or file_size <= 0):
+                raise GuardError("Drive 导入源文件大小必须为正整数或未知")
+        elif not isinstance(file_size, int) or file_size <= 0:
+            raise GuardError("Drive 导入的上传结果必须包含正文件大小")
+        target_parent = _require_dict(before_state.get("target_parent"), "before_state.target_parent")
+        if target_parent.get("folder_token") != target_folder_token:
+            raise GuardError("Drive 导入的目标文件夹与当前状态不一致")
+        file_name = _require_non_empty_str(changes.get("file_name"), "changes.file_name")
+        target_titles, _ = _collect_named_children(
+            target_parent.get("children", []),
+            "before_state.target_parent.children",
+            "token",
+            title_field="name",
+            allow_empty_titles=True,
+        )
+        if file_name in target_titles:
+            raise GuardError("目标文件夹已有同名子项")
+        expected_arguments = {
+            "data": {
+                "file_extension": file_extension,
+                "file_name": file_name,
+                "file_token": source_file_token,
+                "point": {"mount_key": target_folder_token, "mount_type": 1},
+                "type": target_type,
+            },
+            "useUAT": True,
+        }
+        if changes.get("apply_arguments") != expected_arguments:
+            raise GuardError("Drive 导入调用参数与预览范围不一致")
+        return
+
+    if operation == "create" and scope.get("entity") == "export_task":
+        source_token = _require_non_empty_str(scope.get("source_token"), "scope.source_token")
+        source_type = _require_non_empty_str(scope.get("source_type"), "scope.source_type")
+        file_extension = _require_non_empty_str(scope.get("file_extension"), "scope.file_extension")
+        if file_extension not in DRIVE_EXPORT_FORMATS.get(source_type, set()):
+            raise GuardError(f"Drive 不支持将 {source_type} 导出为 {file_extension}")
+        source = _require_dict(before_state.get("source"), "before_state.source")
+        if source.get("token") != source_token or source.get("type") != source_type:
+            raise GuardError("Drive 导出的源 token/type 与当前状态不一致")
+        _require_non_empty_str(source.get("title"), "before_state.source.title")
+        expected_arguments = {
+            "data": {"token": source_token, "type": source_type, "file_extension": file_extension},
+            "useUAT": True,
+        }
+        if changes.get("apply_arguments") != expected_arguments:
+            raise GuardError("Drive 导出调用参数与预览范围不一致")
+        return
+
+    if operation == "create":
+        parent_folder_token = _require_non_empty_str(
+            scope.get("parent_folder_token"), "scope.parent_folder_token", allow_empty=True
+        )
+        if _require_non_empty_str(scope.get("resource_type"), "scope.resource_type") != "folder":
+            raise GuardError("Drive 创建写预览仅支持文件夹")
+        if before_state.get("folder_token") != parent_folder_token:
+            raise GuardError("Drive 创建预览的父文件夹与当前状态不一致")
+        name = _require_non_empty_str(changes.get("name"), "changes.name")
+        child_titles, _ = _collect_named_children(
+            before_state.get("children", []),
+            "before_state.children",
+            "token",
+            title_field="name",
+            allow_empty_titles=True,
+        )
+        if name in child_titles:
+            raise GuardError("目标文件夹已有同名子项")
+        expected_arguments = {
+            "data": {"folder_token": parent_folder_token, "name": name},
+            "useUAT": True,
+        }
+        if changes.get("apply_arguments") != expected_arguments:
+            raise GuardError("Drive 创建调用参数与预览范围不一致")
+        return
+
+    if operation == "update":
+        return
+
+    source_token = _require_non_empty_str(scope.get("source_token"), "scope.source_token")
+    source_type = _require_non_empty_str(scope.get("source_type"), "scope.source_type")
+    allowed_source_types = DRIVE_COPY_SOURCE_TYPES if operation == "copy" else DRIVE_MOVE_SOURCE_TYPES
+    if source_type not in allowed_source_types:
+        raise GuardError(f"Drive {operation} 不支持源类型 {source_type}")
+    source_parent_folder_token = None
+    if operation == "move" or "source_parent_folder_token" in scope:
+        source_parent_folder_token = _require_non_empty_str(
+            scope.get("source_parent_folder_token"), "scope.source_parent_folder_token"
+        )
+    target_parent_folder_token = _require_non_empty_str(
+        scope.get("target_parent_folder_token"), "scope.target_parent_folder_token"
+    )
+
+    source = _require_dict(before_state.get("source"), "before_state.source")
+    if source.get("token") != source_token:
+        raise GuardError("scope.source_token 与 before_state 不一致")
+    if source.get("type") != source_type:
+        raise GuardError("scope.source_type 与 before_state 不一致")
+    if source_parent_folder_token is not None and source.get("parent_folder_token") != source_parent_folder_token:
+        raise GuardError("source_parent_folder_token 与 before_state 不一致")
+    source_name = _require_non_empty_str(source.get("name"), "before_state.source.name")
+
+    target_parent = _require_dict(before_state.get("target_parent"), "before_state.target_parent")
+    if target_parent.get("folder_token") != target_parent_folder_token:
+        raise GuardError("target_parent_folder_token 与 before_state 不一致")
+
+    title = changes.get("name", source_name)
+    title = _require_non_empty_str(title, "changes.name")
+    target_titles, _ = _collect_named_children(
+        target_parent.get("children", []),
+        "before_state.target_parent.children",
+        "token",
+        title_field="name",
+        allow_empty_titles=True,
+    )
+    if operation == "move" and source_parent_folder_token == target_parent_folder_token and title == source_name:
+        raise GuardError("Drive 移动预览目标未发生变化")
+    if title in target_titles:
+        raise GuardError("目标文件夹已有同名子项")
+    expected_data = {"folder_token": target_parent_folder_token, "type": source_type}
+    if operation == "copy":
+        expected_data["name"] = title
+    expected_arguments = {
+        "path": {"file_token": source_token},
+        "data": expected_data,
+        "useUAT": True,
+    }
+    if changes.get("apply_arguments") != expected_arguments:
+        raise GuardError(f"Drive {operation} 调用参数与预览范围不一致")
+
+
+def _validate_drive_version_plan(scope: Any, before_state: Any, changes: Any) -> None:
+    _validate_drive_plan(scope, before_state, changes, "update")
+    resource = _require_dict(before_state.get("resource"), "before_state.resource")
+    resource_token = _require_non_empty_str(scope.get("resource_token"), "scope.resource_token")
+    resource_type = _require_non_empty_str(scope.get("resource_type"), "scope.resource_type")
+    if resource_type not in DRIVE_VERSION_SOURCE_TYPES:
+        raise GuardError(f"Drive 版本创建不支持资源类型 {resource_type}")
+    if resource.get("token") != resource_token:
+        raise GuardError("scope.resource_token 与 before_state.resource.token 不一致")
+    if resource.get("type") != resource_type:
+        raise GuardError("scope.resource_type 与 before_state.resource.type 不一致")
+    versions = before_state.get("versions")
+    if not isinstance(versions, list) or before_state.get("versions_complete") is not True:
+        raise GuardError("Drive 版本列表必须完整")
+    version_name = _require_non_empty_str(changes.get("name"), "changes.name")
+    existing_names = {
+        _require_non_empty_str(item.get("name"), f"before_state.versions[{index}].name")
+        for index, item in enumerate(versions)
+        if isinstance(item, dict)
+    }
+    if len(existing_names) != len(versions):
+        raise GuardError("Drive 版本列表包含无效或重复条目")
+    if version_name in existing_names:
+        raise GuardError("目标文档已有同名版本")
+    expected_arguments = {
+        "path": {"file_token": resource_token},
+        "data": {"name": version_name, "obj_type": resource_type},
+        "useUAT": True,
+    }
+    if changes.get("apply_arguments") != expected_arguments:
+        raise GuardError("Drive 版本创建调用参数与预览范围不一致")
+
+
 def summarize_batch_outcomes(
     planned_keys: Any,
     successful_keys: Any,
@@ -201,6 +609,142 @@ def summarize_batch_outcomes(
         ],
         "unattempted": [key for key in planned if key in unattempted],
     }
+
+
+def _column_number(label: str) -> int:
+    value = 0
+    for character in label:
+        value = value * 26 + ord(character) - ord("A") + 1
+    return value
+
+
+def _sheets_range_bounds(value: Any, expected_sheet_id: str) -> tuple[int, int, int, int]:
+    match = SHEETS_RANGE_RE.fullmatch(value) if isinstance(value, str) else None
+    if not match or match.group(1) != expected_sheet_id:
+        raise GuardError("Sheets 范围必须是当前工作表的矩形 A1 区域")
+    start_column, start_row = _column_number(match.group(2)), int(match.group(3))
+    end_column, end_row = _column_number(match.group(4)), int(match.group(5))
+    if start_column > end_column or start_row > end_row:
+        raise GuardError("Sheets 范围起点不能晚于终点")
+    return start_column, start_row, end_column, end_row
+
+
+def _validate_sheets_cells(cells: Any, field: str, sheet_id: str, bounds: tuple[int, int, int, int]) -> list[str]:
+    values = _string_list(cells, field, allow_empty=True)
+    start_column, start_row, end_column, end_row = bounds
+    for cell in values:
+        match = SHEETS_CELL_RE.fullmatch(cell)
+        if not match or match.group(1) != sheet_id:
+            raise GuardError(f"{field} 包含其他工作表或无效单元格")
+        column, row = _column_number(match.group(2)), int(match.group(3))
+        if not (start_column <= column <= end_column and start_row <= row <= end_row):
+            raise GuardError(f"{field} 包含预览范围外单元格")
+    return values
+
+
+def _validate_sheets_replace_plan(
+    scope: Any,
+    before_state: Any,
+    changes: Any,
+    verification: Any,
+    operation: str,
+) -> None:
+    required_scope = ("spreadsheet_token", "spreadsheet_title", "sheet_id", "sheet_title", "range")
+    if operation != "replace":
+        raise GuardError("Sheets 预览当前只支持限定范围 replace")
+    if not isinstance(scope, dict) or scope.get("entity") != "cells" or any(
+        not isinstance(scope.get(field), str) or not scope[field].strip() for field in required_scope
+    ):
+        raise GuardError("Sheets 预览必须唯一指定电子表格、工作表和范围")
+    bounds = _sheets_range_bounds(scope["range"], scope["sheet_id"])
+    if not isinstance(before_state, dict) or any(
+        before_state.get(field) != scope[field] for field in required_scope
+    ):
+        raise GuardError("Sheets 当前状态与预览目标不一致")
+
+    sheets = before_state.get("sheets")
+    if not isinstance(sheets, list) or not sheets:
+        raise GuardError("Sheets 当前状态必须包含完整工作表清单")
+    selected = []
+    sheet_ids = set()
+    for sheet in sheets:
+        if not isinstance(sheet, dict) or any(
+            not isinstance(sheet.get(field), str) or not sheet[field].strip()
+            for field in ("sheet_id", "title")
+        ):
+            raise GuardError("Sheets 工作表清单不完整")
+        if sheet["sheet_id"] in sheet_ids:
+            raise GuardError("Sheets 工作表清单包含重复 sheet_id")
+        sheet_ids.add(sheet["sheet_id"])
+        if sheet["sheet_id"] == scope["sheet_id"]:
+            selected.append(sheet)
+    if len(selected) != 1 or selected[0]["title"] != scope["sheet_title"]:
+        raise GuardError("Sheets 工作表 ID 与标题不能唯一对应")
+
+    condition = before_state.get("find_condition")
+    if not isinstance(condition, dict) or any(
+        not isinstance(condition.get(field), bool)
+        for field in ("match_case", "match_entire_cell", "search_by_regex", "include_formulas")
+    ):
+        raise GuardError("Sheets 查找条件必须显式指定四个布尔选项")
+    if condition["search_by_regex"] or condition["include_formulas"] or not condition["match_entire_cell"]:
+        raise GuardError("Sheets 当前仅支持纯文本整格匹配")
+    find = before_state.get("find")
+    replacement = before_state.get("replacement")
+    if not isinstance(find, str) or not find or not isinstance(replacement, str) or find == replacement:
+        raise GuardError("Sheets 查找值必须非空且与替换值不同")
+    if not before_state.get("find_complete") or not before_state.get("replacement_find_complete"):
+        raise GuardError("Sheets 查找结果必须完整")
+    matches = _validate_sheets_cells(
+        before_state.get("matches"), "before_state.matches", scope["sheet_id"], bounds
+    )
+    replacement_matches = _validate_sheets_cells(
+        before_state.get("replacement_matches"),
+        "before_state.replacement_matches",
+        scope["sheet_id"],
+        bounds,
+    )
+    if not matches or set(matches) & set(replacement_matches):
+        raise GuardError("Sheets 替换必须有匹配项，且新旧值匹配单元格不能重叠")
+    if scope.get("match_count") != len(matches):
+        raise GuardError("Sheets 匹配数量与预览范围不一致")
+
+    if not isinstance(changes, dict) or any(
+        changes.get(field) != before_state[field]
+        for field in ("find", "replacement", "find_condition")
+    ):
+        raise GuardError("Sheets 替换内容或条件与当前状态不一致")
+    if changes.get("matched_cells") != matches or changes.get(
+        "preexisting_replacement_cells"
+    ) != replacement_matches:
+        raise GuardError("Sheets 预览匹配清单与当前查找结果不一致")
+    if changes.get("replacement_count") != len(matches):
+        raise GuardError("Sheets 替换数量与匹配清单不一致")
+    expected_arguments = {
+        "path": {
+            "spreadsheet_token": scope["spreadsheet_token"],
+            "sheet_id": scope["sheet_id"],
+        },
+        "data": {
+            "find": find,
+            "replacement": replacement,
+            "find_condition": {**condition, "range": scope["range"]},
+        },
+        "useUAT": True,
+    }
+    if changes.get("apply_arguments") != expected_arguments:
+        raise GuardError("Sheets 替换调用参数与预览范围或条件不一致")
+    if not isinstance(changes.get("pending_confirmations"), list):
+        raise GuardError("Sheets 预览必须包含 changes.pending_confirmations 数组")
+
+    expected_replacement_matches = sorted(set(matches) | set(replacement_matches))
+    if not isinstance(verification, dict) or verification != {
+        "range": scope["range"],
+        "old_value_matches": [],
+        "replacement_matches": expected_replacement_matches,
+        "outside_range_check": "manual",
+    }:
+        raise GuardError("Sheets 写后验证必须固定旧值、新值和范围外人工检查")
 
 
 def _validate_docx_block_plan(blocks: Any) -> None:
@@ -490,12 +1034,30 @@ def make_preview(spec: dict[str, Any]) -> dict[str, Any]:
         raise GuardError(f"操作默认关闭：{operation}")
     if operation not in WRITE_OPERATIONS:
         raise GuardError(f"不支持的写入操作：{operation}")
-    if spec["resource_type"] == "docx" and operation == "create":
-        _validate_docx_create(spec["scope"], spec["changes"])
-    if spec["resource_type"] == "docx" and operation in DOCX_EDIT_OPERATIONS:
-        _validate_docx_edit(spec["scope"], spec["before_state"], spec["changes"], spec.get("risks", []))
+    if spec["resource_type"] == "docx":
+        if operation not in DOCX_WRITE_OPERATIONS:
+            raise GuardError("docx 写预览只支持 create/append/insert/replace")
+        if operation == "create":
+            _validate_docx_create(spec["scope"], spec["changes"])
+        elif operation in DOCX_EDIT_OPERATIONS:
+            _validate_docx_edit(spec["scope"], spec["before_state"], spec["changes"], spec.get("risks", []))
     if spec["resource_type"] == "bitable":
         _validate_bitable_record_plan(spec["scope"], spec["before_state"], spec["changes"], operation)
+    if spec["resource_type"] == "sheets":
+        _validate_sheets_replace_plan(
+            spec["scope"],
+            spec["before_state"],
+            spec["changes"],
+            spec["verification"],
+            operation,
+        )
+    if spec["resource_type"] == "wiki":
+        _validate_wiki_plan(spec["scope"], spec["before_state"], spec["changes"], operation)
+    if spec["resource_type"] == "drive":
+        if operation == "update":
+            _validate_drive_version_plan(spec["scope"], spec["before_state"], spec["changes"])
+        else:
+            _validate_drive_plan(spec["scope"], spec["before_state"], spec["changes"], operation)
 
     identity = spec.get("identity", "user")
     explicit_application = bool(spec.get("application_identity_explicit", False))
@@ -550,8 +1112,19 @@ def validate_preview(
         raise GuardError(f"不支持的写入操作：{operation}")
     if not isinstance(preview["resource_type"], str) or preview["resource_type"] not in RESOURCE_TYPES:
         raise GuardError(f"不支持的资源类型：{preview['resource_type']}")
-    if preview["resource_type"] == "docx" and operation == "create":
-        _validate_docx_create(preview["scope"], preview["changes"])
+    expected_id = "fs-" + fingerprint(_preview_payload(preview))[:16]
+    if expected_id != preview.get("preview_id"):
+        raise GuardError("预览内容已被修改")
+    if fingerprint(current_state) != preview.get("before_fingerprint"):
+        raise GuardError("目标在预览后发生变化，必须重新生成预览")
+
+    if preview["resource_type"] == "docx":
+        if operation not in DOCX_WRITE_OPERATIONS:
+            raise GuardError("docx 写预览只支持 create/append/insert/replace")
+        if operation == "create":
+            _validate_docx_create(preview["scope"], preview["changes"])
+        elif operation in DOCX_EDIT_OPERATIONS:
+            _validate_docx_edit(preview["scope"], current_state, preview["changes"], preview.get("risks", []))
     if not isinstance(preview["required_tools"], list) or not preview["required_tools"]:
         raise GuardError("required_tools 必须是非空数组")
 
@@ -560,15 +1133,23 @@ def validate_preview(
         explicit_application=bool(preview.get("application_identity_explicit", False)),
     )
 
-    expected_id = "fs-" + fingerprint(_preview_payload(preview))[:16]
-    if expected_id != preview.get("preview_id"):
-        raise GuardError("预览内容已被修改")
-    if fingerprint(current_state) != preview.get("before_fingerprint"):
-        raise GuardError("目标在预览后发生变化，必须重新生成预览")
-    if preview["resource_type"] == "docx" and operation in DOCX_EDIT_OPERATIONS:
-        _validate_docx_edit(preview["scope"], current_state, preview["changes"], preview.get("risks", []))
     if preview["resource_type"] == "bitable":
         _validate_bitable_record_plan(preview["scope"], current_state, preview["changes"], operation)
+    if preview["resource_type"] == "sheets":
+        _validate_sheets_replace_plan(
+            preview["scope"],
+            current_state,
+            preview["changes"],
+            preview["verification"],
+            operation,
+        )
+    if preview["resource_type"] == "wiki":
+        _validate_wiki_plan(preview["scope"], current_state, preview["changes"], operation)
+    if preview["resource_type"] == "drive":
+        if operation == "update":
+            _validate_drive_version_plan(preview["scope"], current_state, preview["changes"])
+        else:
+            _validate_drive_plan(preview["scope"], current_state, preview["changes"], operation)
 
     unavailable = missing_tools(preview.get("required_tools", []), available_tools)
     if unavailable:
@@ -610,6 +1191,9 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("--tools", required=True, help="JSON array of available tool names")
     validate.add_argument("--applied", help="optional JSON array of applied preview IDs")
 
+    defaults = commands.add_parser("validate-defaults")
+    defaults.add_argument("config", help="JSON file path, or - for stdin")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "classify-url":
@@ -618,6 +1202,8 @@ def main(argv: list[str] | None = None) -> int:
             result = identity_parameters(args.identity, explicit_application=args.explicit)
         elif args.command == "make-preview":
             result = make_preview(load_json(args.spec))
+        elif args.command == "validate-defaults":
+            result = validate_default_locations(load_json(args.config))
         else:
             result = validate_preview(
                 load_json(args.preview),

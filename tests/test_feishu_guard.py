@@ -7,6 +7,7 @@ from scripts.feishu_guard import (
     make_preview,
     missing_tools,
     summarize_batch_outcomes,
+    validate_default_locations,
     validate_feishu_tool,
     validate_mode,
     validate_preview,
@@ -20,6 +21,25 @@ CREATE_BLOCKS_TOOL = "mcp__feishu__docx_v1_documentBlockChildren_create"
 BITABLE_READ_TOOL = "mcp__feishu__bitable_v1_appTableRecord_search"
 BITABLE_CREATE_TOOL = "mcp__feishu__bitable_v1_appTableRecord_create"
 BITABLE_UPDATE_TOOL = "mcp__feishu__bitable_v1_appTableRecord_update"
+SHEETS_FIND_TOOL = "mcp__feishu__sheets_v3_spreadsheetSheet_find"
+SHEETS_REPLACE_TOOL = "mcp__feishu__sheets_v3_spreadsheetSheet_replace"
+WIKI_CREATE_TOOL = "mcp__feishu__wiki_v2_spaceNode_create"
+WIKI_COPY_TOOL = "mcp__feishu__wiki_v2_spaceNode_copy"
+WIKI_MOVE_TOOL = "mcp__feishu__wiki_v2_spaceNode_move"
+WIKI_UPDATE_TOOL = "mcp__feishu__wiki_v2_spaceNode_updateTitle"
+WIKI_IMPORT_TOOL = "mcp__feishu__wiki_v2_spaceNode_moveDocsToWiki"
+WIKI_TASK_GET_TOOL = "mcp__feishu__wiki_v2_task_get"
+DRIVE_FILE_LIST_TOOL = "mcp__feishu__drive_v1_file_list"
+DRIVE_FOLDER_CREATE_TOOL = "mcp__feishu__drive_v1_file_createFolder"
+DRIVE_FILE_COPY_TOOL = "mcp__feishu__drive_v1_file_copy"
+DRIVE_FILE_MOVE_TOOL = "mcp__feishu__drive_v1_file_move"
+DRIVE_VERSION_TOOL = "mcp__feishu__drive_v1_fileVersion_create"
+DRIVE_VERSION_GET_TOOL = "mcp__feishu__drive_v1_fileVersion_get"
+DRIVE_VERSION_LIST_TOOL = "mcp__feishu__drive_v1_fileVersion_list"
+DRIVE_EXPORT_CREATE_TOOL = "mcp__feishu__drive_v1_exportTask_create"
+DRIVE_EXPORT_GET_TOOL = "mcp__feishu__drive_v1_exportTask_get"
+DRIVE_IMPORT_CREATE_TOOL = "mcp__feishu__drive_v1_importTask_create"
+DRIVE_IMPORT_GET_TOOL = "mcp__feishu__drive_v1_importTask_get"
 
 
 def preview_spec(**overrides):
@@ -155,6 +175,392 @@ def bitable_preview_spec(operation="create", **overrides):
     return spec
 
 
+def sheets_preview_spec(**overrides):
+    condition = {
+        "match_case": True,
+        "match_entire_cell": True,
+        "search_by_regex": False,
+        "include_formulas": False,
+    }
+    spec = {
+        "target": "https://example.feishu.cn/sheets/shtcnTest",
+        "resource_type": "sheets",
+        "identity": "user",
+        "operation": "replace",
+        "scope": {
+            "entity": "cells",
+            "spreadsheet_token": "shtcnTest",
+            "spreadsheet_title": "测试表格",
+            "sheet_id": "sheet1",
+            "sheet_title": "数据",
+            "range": "sheet1!A2:B4",
+            "match_count": 2,
+        },
+        "before_state": {
+            "spreadsheet_token": "shtcnTest",
+            "spreadsheet_title": "测试表格",
+            "sheet_id": "sheet1",
+            "sheet_title": "数据",
+            "range": "sheet1!A2:B4",
+            "sheets": [
+                {"sheet_id": "sheet1", "title": "数据"},
+                {"sheet_id": "sheet2", "title": "归档"},
+            ],
+            "find": "旧状态",
+            "replacement": "新状态",
+            "find_condition": condition,
+            "find_complete": True,
+            "replacement_find_complete": True,
+            "matches": ["sheet1!A2", "sheet1!B4"],
+            "replacement_matches": ["sheet1!A3"],
+        },
+        "changes": {
+            "find": "旧状态",
+            "replacement": "新状态",
+            "find_condition": condition,
+            "matched_cells": ["sheet1!A2", "sheet1!B4"],
+            "preexisting_replacement_cells": ["sheet1!A3"],
+            "replacement_count": 2,
+            "apply_arguments": {
+                "path": {"spreadsheet_token": "shtcnTest", "sheet_id": "sheet1"},
+                "data": {
+                    "find": "旧状态",
+                    "replacement": "新状态",
+                    "find_condition": {**condition, "range": "sheet1!A2:B4"},
+                },
+                "useUAT": True,
+            },
+            "pending_confirmations": [],
+        },
+        "risks": [],
+        "required_tools": [SHEETS_FIND_TOOL, SHEETS_REPLACE_TOOL],
+        "verification": {
+            "range": "sheet1!A2:B4",
+            "old_value_matches": [],
+            "replacement_matches": ["sheet1!A2", "sheet1!A3", "sheet1!B4"],
+            "outside_range_check": "manual",
+        },
+    }
+    spec.update(overrides)
+    return spec
+
+
+def wiki_preview_spec(operation="create", **overrides):
+    if operation == "create":
+        scope = {
+            "space_id": "spc123",
+            "parent_node_token": "wiki-parent",
+            "placement": "append",
+        }
+        before_state = {
+            "space_id": "spc123",
+            "parent_node_token": "wiki-parent",
+            "parent_node_title": "测试知识库",
+            "children": [
+                {"node_token": "wiki-existing", "title": "已有子节点", "node_type": "docx"},
+            ],
+        }
+        changes = {
+            "title": "测试 Wiki 节点",
+            "node_type": "docx",
+            "pending_confirmations": [],
+        }
+        required_tools = [WIKI_CREATE_TOOL]
+    elif operation in {"copy", "move"}:
+        scope = {
+            "space_id": "spc123",
+            "source_node_token": "wiki-source",
+            "source_parent_node_token": "wiki-source-parent",
+            "target_parent_node_token": "wiki-target-parent",
+        }
+        before_state = {
+            "space_id": "spc123",
+            "source_node": {
+                "node_token": "wiki-source",
+                "title": "源节点",
+                "node_type": "docx",
+                "parent_node_token": "wiki-source-parent",
+            },
+            "target_parent": {
+                "parent_node_token": "wiki-target-parent",
+                "parent_node_title": "目标目录",
+                "children": [
+                    {"node_token": "wiki-existing", "title": "同名节点", "node_type": "docx"},
+                ],
+            },
+        }
+        changes = {"title": "复制后的源节点", "pending_confirmations": []}
+        required_tools = [WIKI_COPY_TOOL] if operation == "copy" else [WIKI_MOVE_TOOL]
+    elif operation == "update":
+        scope = {
+            "space_id": "spc123",
+            "node_token": "wiki-source",
+            "parent_node_token": "wiki-parent",
+        }
+        before_state = {
+            "space_id": "spc123",
+            "node": {
+                "node_token": "wiki-source",
+                "title": "原标题",
+                "node_type": "docx",
+                "parent_node_token": "wiki-parent",
+            },
+        }
+        changes = {"title": "新标题", "pending_confirmations": []}
+        required_tools = [WIKI_UPDATE_TOOL]
+    else:
+        raise ValueError("unsupported wiki operation")
+
+    spec = {
+        "target": "https://example.feishu.cn/wiki/wiki-source",
+        "resource_type": "wiki",
+        "identity": "user",
+        "operation": operation,
+        "scope": scope,
+        "before_state": before_state,
+        "changes": changes,
+        "risks": [],
+        "required_tools": required_tools,
+        "verification": {"node_token": "wiki-source"},
+    }
+    spec.update(overrides)
+    return spec
+
+
+def drive_preview_spec(operation="create", **overrides):
+    if operation == "create":
+        scope = {
+            "parent_folder_token": "",
+            "resource_type": "folder",
+        }
+        before_state = {
+            "folder_token": "",
+            "folder_name": "根目录",
+            "children": [
+                {"token": "fld-existing", "name": "已有文件夹", "type": "folder"},
+            ],
+        }
+        changes = {
+            "name": "测试目录",
+            "resource_type": "folder",
+            "apply_arguments": {
+                "data": {"folder_token": "", "name": "测试目录"},
+                "useUAT": True,
+            },
+            "pending_confirmations": [],
+        }
+        required_tools = [DRIVE_FILE_LIST_TOOL, DRIVE_FOLDER_CREATE_TOOL]
+    elif operation in {"copy", "move"}:
+        scope = {
+            "source_token": "file-source",
+            "source_type": "file",
+            "source_parent_folder_token": "fld-source",
+            "target_parent_folder_token": "fld-target",
+        }
+        before_state = {
+            "source": {
+                "token": "file-source",
+                "type": "file",
+                "name": "原文件.docx",
+                "parent_folder_token": "fld-source",
+            },
+            "target_parent": {
+                "folder_token": "fld-target",
+                "folder_name": "目标目录",
+                "children": [
+                    {"token": "file-other", "name": "其他文件.docx", "type": "file"},
+                ],
+            },
+        }
+        apply_data = {"folder_token": "fld-target", "type": "file"}
+        if operation == "copy":
+            apply_data["name"] = "复制后的原文件.docx"
+        changes = {
+            "name": "复制后的原文件.docx",
+            "apply_arguments": {
+                "path": {"file_token": "file-source"},
+                "data": apply_data,
+                "useUAT": True,
+            },
+            "pending_confirmations": [],
+        }
+        required_tools = [DRIVE_FILE_COPY_TOOL] if operation == "copy" else [DRIVE_FILE_MOVE_TOOL]
+    elif operation == "update":
+        scope = {
+            "resource_token": "file-source",
+            "resource_type": "docx",
+        }
+        before_state = {
+            "resource": {
+                "token": "file-source",
+                "type": "docx",
+                "name": "原文件.docx",
+            },
+            "versions": [],
+            "versions_complete": True,
+        }
+        changes = {
+            "name": "M4 版本能力验收",
+            "apply_arguments": {
+                "path": {"file_token": "file-source"},
+                "data": {"name": "M4 版本能力验收", "obj_type": "docx"},
+                "useUAT": True,
+            },
+            "pending_confirmations": [],
+        }
+        required_tools = [DRIVE_VERSION_LIST_TOOL, DRIVE_VERSION_TOOL, DRIVE_VERSION_GET_TOOL]
+    else:
+        raise ValueError("unsupported drive operation")
+
+    spec = {
+        "target": "https://example.feishu.cn/drive/folder/fld-source",
+        "resource_type": "drive",
+        "identity": "user",
+        "operation": operation,
+        "scope": scope,
+        "before_state": before_state,
+        "changes": changes,
+        "risks": [],
+        "required_tools": required_tools,
+        "verification": {"folder_token": "fld-source"},
+    }
+    spec.update(overrides)
+    return spec
+
+
+def wiki_import_preview_spec(**overrides):
+    scope = {
+        "entity": "drive_document",
+        "space_id": "spc123",
+        "source_token": "docx-source",
+        "source_type": "docx",
+        "source_parent_folder_token": "fld-source",
+        "target_parent_node_token": "wiki-parent",
+    }
+    before_state = {
+        "space_id": "spc123",
+        "source_document": {
+            "token": "docx-source",
+            "type": "docx",
+            "title": "待入库文档",
+            "parent_folder_token": "fld-source",
+        },
+        "target_parent": {
+            "space_id": "spc123",
+            "parent_node_token": "wiki-parent",
+            "title": "测试知识库",
+            "children": [{"node_token": "wiki-other", "title": "已有文档"}],
+        },
+    }
+    changes = {
+        "apply_arguments": {
+            "path": {"space_id": "spc123"},
+            "data": {
+                "obj_token": "docx-source",
+                "obj_type": "docx",
+                "parent_wiki_token": "wiki-parent",
+                "apply": False,
+            },
+            "useUAT": True,
+        },
+        "pending_confirmations": [],
+    }
+    spec = {
+        "target": "https://example.feishu.cn/wiki/wiki-parent",
+        "resource_type": "wiki",
+        "identity": "user",
+        "operation": "move",
+        "scope": scope,
+        "before_state": before_state,
+        "changes": changes,
+        "risks": [],
+        "required_tools": [DRIVE_FILE_LIST_TOOL, WIKI_IMPORT_TOOL, WIKI_TASK_GET_TOOL],
+        "verification": {"parent_node_token": "wiki-parent", "title": "待入库文档"},
+    }
+    spec.update(overrides)
+    return spec
+
+
+def drive_export_preview_spec(**overrides):
+    spec = {
+        "target": "https://example.feishu.cn/docx/docx-source",
+        "resource_type": "drive",
+        "identity": "user",
+        "operation": "create",
+        "scope": {
+            "entity": "export_task",
+            "source_token": "docx-source",
+            "source_type": "docx",
+            "file_extension": "docx",
+        },
+        "before_state": {
+            "source": {"token": "docx-source", "type": "docx", "title": "待导出文档"}
+        },
+        "changes": {
+            "apply_arguments": {
+                "data": {"token": "docx-source", "type": "docx", "file_extension": "docx"},
+                "useUAT": True,
+            },
+            "pending_confirmations": [],
+        },
+        "risks": [],
+        "required_tools": [DRIVE_EXPORT_CREATE_TOOL, DRIVE_EXPORT_GET_TOOL],
+        "verification": {"file_extension": "docx"},
+    }
+    spec.update(overrides)
+    return spec
+
+
+def drive_import_preview_spec(**overrides):
+    spec = {
+        "target": "https://example.feishu.cn/drive/folder/fld-target",
+        "resource_type": "drive",
+        "identity": "user",
+        "operation": "create",
+        "scope": {
+            "entity": "import_task",
+            "source_file_token": "exported-file",
+            "file_extension": "docx",
+            "target_type": "docx",
+            "target_folder_token": "fld-target",
+        },
+        "before_state": {
+            "source_file": {
+                "token": "exported-file",
+                "file_extension": "docx",
+                "file_name": "源文件.docx",
+                "file_size": 1024,
+                "provenance": "file_upload",
+                "type": "file",
+            },
+            "target_parent": {
+                "folder_token": "fld-target",
+                "folder_name": "测试目录",
+                "children": [{"token": "other", "name": "已有文档", "type": "docx"}],
+            },
+        },
+        "changes": {
+            "file_name": "导入能力验收",
+            "apply_arguments": {
+                "data": {
+                    "file_extension": "docx",
+                    "file_name": "导入能力验收",
+                    "file_token": "exported-file",
+                    "point": {"mount_key": "fld-target", "mount_type": 1},
+                    "type": "docx",
+                },
+                "useUAT": True,
+            },
+            "pending_confirmations": [],
+        },
+        "risks": [],
+        "required_tools": [DRIVE_FILE_LIST_TOOL, DRIVE_IMPORT_CREATE_TOOL, DRIVE_IMPORT_GET_TOOL],
+        "verification": {"file_name": "导入能力验收", "target_type": "docx"},
+    }
+    spec.update(overrides)
+    return spec
+
+
 class UrlTests(unittest.TestCase):
     def test_classifies_supported_feishu_links(self):
         cases = {
@@ -188,7 +594,6 @@ class UrlTests(unittest.TestCase):
         self.assertEqual("drive", result["resource_type"])
         self.assertEqual("fldcnTest", result["token"])
 
-
 class IdentityAndTransportTests(unittest.TestCase):
     def test_user_identity_is_explicit_default(self):
         self.assertEqual({"identity": "user", "useUAT": True}, identity_parameters())
@@ -212,6 +617,24 @@ class IdentityAndTransportTests(unittest.TestCase):
             with self.subTest(mode=mode), self.assertRaises(GuardError):
                 validate_mode(mode, mutating=True)
         validate_mode("apply", mutating=True)
+
+
+class DefaultLocationTests(unittest.TestCase):
+    def test_accepts_wiki_parent_and_drive_root(self):
+        config = {
+            "wiki": {"space_id": "7669390318399130909", "parent_node_token": "wiki-test"},
+            "drive": {"folder_token": ""},
+        }
+        self.assertEqual(config, validate_default_locations(config))
+
+    def test_rejects_incomplete_locations(self):
+        for config in (
+            {},
+            {"wiki": {"space_id": "space", "parent_node_token": ""}, "drive": {"folder_token": ""}},
+            {"wiki": {"space_id": "space", "parent_node_token": "node"}, "drive": {}},
+        ):
+            with self.subTest(config=config), self.assertRaises(GuardError):
+                validate_default_locations(config)
 
 
 class PreviewTests(unittest.TestCase):
@@ -431,6 +854,247 @@ class PreviewTests(unittest.TestCase):
 
         with self.assertRaisesRegex(GuardError, "同时成功和失败"):
             summarize_batch_outcomes(["P-001"], ["P-001"], {"P-001": "冲突"})
+
+    def test_sheets_replace_preview_is_range_bound_and_deterministic(self):
+        spec = sheets_preview_spec()
+        preview = make_preview(spec)
+        result = validate_preview(
+            preview,
+            spec["before_state"],
+            preview["preview_id"],
+            spec["required_tools"],
+        )
+        self.assertTrue(result["valid"])
+
+        spec["before_state"]["matches"].append("sheet1!C2")
+        spec["scope"]["match_count"] = 3
+        spec["changes"]["matched_cells"].append("sheet1!C2")
+        spec["changes"]["replacement_count"] = 3
+        with self.assertRaisesRegex(GuardError, "范围外"):
+            make_preview(spec)
+
+    def test_sheets_replace_requires_exact_text_matching(self):
+        for field, value in (
+            ("match_entire_cell", False),
+            ("search_by_regex", True),
+            ("include_formulas", True),
+        ):
+            spec = sheets_preview_spec()
+            spec["before_state"]["find_condition"][field] = value
+            spec["changes"]["find_condition"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(GuardError, "纯文本整格匹配"):
+                make_preview(spec)
+
+    def test_sheets_replace_requires_unique_sheet_and_complete_find(self):
+        spec = sheets_preview_spec()
+        spec["before_state"]["sheets"][0]["title"] = "其他"
+        with self.assertRaisesRegex(GuardError, "唯一对应"):
+            make_preview(spec)
+
+        spec = sheets_preview_spec()
+        spec["before_state"]["find_complete"] = False
+        with self.assertRaisesRegex(GuardError, "查找结果必须完整"):
+            make_preview(spec)
+
+    def test_sheets_replace_locks_apply_arguments_and_verification(self):
+        spec = sheets_preview_spec()
+        spec["changes"]["apply_arguments"]["data"]["find_condition"]["range"] = "sheet1!A1:B4"
+        with self.assertRaisesRegex(GuardError, "调用参数"):
+            make_preview(spec)
+
+        spec = sheets_preview_spec()
+        spec["verification"]["replacement_matches"] = ["sheet1!A2", "sheet1!B4"]
+        with self.assertRaisesRegex(GuardError, "写后验证"):
+            make_preview(spec)
+
+    def test_wiki_preview_supports_create_copy_move_update(self):
+        for operation in ("create", "copy", "move", "update"):
+            with self.subTest(operation=operation):
+                spec = wiki_preview_spec(operation=operation)
+                preview = make_preview(spec)
+                result = validate_preview(
+                    preview,
+                    spec["before_state"],
+                    preview["preview_id"],
+                    spec["required_tools"],
+                )
+                self.assertTrue(result["valid"])
+
+    def test_wiki_preview_rejects_unsupported_operation_and_noop_update(self):
+        spec = wiki_preview_spec(operation="create")
+        with self.assertRaisesRegex(GuardError, "只支持 create/copy/move/update"):
+            spec["operation"] = "append"
+            make_preview(spec)
+
+        spec = wiki_preview_spec(operation="update")
+        spec["changes"]["title"] = "原标题"
+        with self.assertRaisesRegex(GuardError, "未发生变化"):
+            make_preview(spec)
+
+        spec = wiki_preview_spec(operation="move")
+        spec["scope"]["target_parent_node_token"] = spec["scope"]["source_parent_node_token"]
+        spec["before_state"]["target_parent"]["parent_node_token"] = spec["scope"]["source_parent_node_token"]
+        spec["changes"]["title"] = spec["before_state"]["source_node"]["title"]
+        with self.assertRaisesRegex(GuardError, "目标未发生变化"):
+            make_preview(spec)
+
+    def test_wiki_preview_checks_duplicate_child_names(self):
+        spec = wiki_preview_spec(operation="create")
+        spec["changes"]["title"] = "已有子节点"
+        with self.assertRaisesRegex(GuardError, "同名子节点"):
+            make_preview(spec)
+
+    def test_wiki_document_import_preview_locks_source_target_and_arguments(self):
+        spec = wiki_import_preview_spec()
+        preview = make_preview(spec)
+        self.assertTrue(
+            validate_preview(preview, spec["before_state"], preview["preview_id"], spec["required_tools"])["valid"]
+        )
+
+        spec = wiki_import_preview_spec()
+        spec["before_state"]["target_parent"]["children"].append(
+            {"node_token": "wiki-duplicate", "title": "待入库文档"}
+        )
+        with self.assertRaisesRegex(GuardError, "同名子节点"):
+            make_preview(spec)
+
+        spec = wiki_import_preview_spec()
+        spec["changes"]["apply_arguments"]["data"]["apply"] = True
+        with self.assertRaisesRegex(GuardError, "调用参数"):
+            make_preview(spec)
+
+        spec = wiki_preview_spec(operation="copy")
+        spec["before_state"]["target_parent"]["children"].append(
+            {"node_token": "wiki-other", "title": "复制后的源节点", "node_type": "docx"},
+        )
+        with self.assertRaisesRegex(GuardError, "同名子节点"):
+            make_preview(spec)
+
+    def test_drive_preview_supports_create_copy_move_update(self):
+        for operation in ("create", "copy", "move", "update"):
+            with self.subTest(operation=operation):
+                spec = drive_preview_spec(operation=operation)
+                preview = make_preview(spec)
+                result = validate_preview(
+                    preview,
+                    spec["before_state"],
+                    preview["preview_id"],
+                    spec["required_tools"],
+                )
+                self.assertTrue(result["valid"])
+
+    def test_drive_export_preview_locks_format_source_and_arguments(self):
+        spec = drive_export_preview_spec()
+        preview = make_preview(spec)
+        self.assertTrue(
+            validate_preview(preview, spec["before_state"], preview["preview_id"], spec["required_tools"])["valid"]
+        )
+
+        spec = drive_export_preview_spec()
+        spec["scope"]["file_extension"] = "xlsx"
+        spec["changes"]["apply_arguments"]["data"]["file_extension"] = "xlsx"
+        with self.assertRaisesRegex(GuardError, "不支持将 docx 导出为 xlsx"):
+            make_preview(spec)
+
+        spec = drive_export_preview_spec()
+        spec["changes"]["apply_arguments"]["useUAT"] = False
+        with self.assertRaisesRegex(GuardError, "调用参数"):
+            make_preview(spec)
+
+    def test_drive_import_preview_locks_source_target_name_and_arguments(self):
+        spec = drive_import_preview_spec()
+        preview = make_preview(spec)
+        self.assertTrue(
+            validate_preview(preview, spec["before_state"], preview["preview_id"], spec["required_tools"])["valid"]
+        )
+
+        spec = drive_import_preview_spec()
+        spec["before_state"]["target_parent"]["children"].append(
+            {"token": "duplicate", "name": "导入能力验收", "type": "docx"}
+        )
+        with self.assertRaisesRegex(GuardError, "同名子项"):
+            make_preview(spec)
+
+        spec = drive_import_preview_spec()
+        spec["changes"]["apply_arguments"]["data"]["point"]["mount_type"] = 2
+        with self.assertRaisesRegex(GuardError, "调用参数"):
+            make_preview(spec)
+
+        spec = drive_import_preview_spec()
+        spec["before_state"]["source_file"]["provenance"] = "export_task"
+        with self.assertRaisesRegex(GuardError, "导出任务返回的文件 token 不能直接用于导入"):
+            make_preview(spec)
+
+        spec = drive_import_preview_spec()
+        spec["before_state"]["source_file"].update(
+            {"provenance": "existing_drive_file", "file_size": None}
+        )
+        preview = make_preview(spec)
+        self.assertTrue(
+            validate_preview(
+                preview,
+                spec["before_state"],
+                preview["preview_id"],
+                spec["required_tools"],
+            )["valid"]
+        )
+
+    def test_drive_preview_allows_unnamed_existing_items(self):
+        spec = drive_preview_spec(operation="create")
+        spec["before_state"]["children"].append(
+            {"token": "unnamed-file", "name": "", "type": "docx"},
+        )
+        self.assertEqual("drive", make_preview(spec)["resource_type"])
+
+    def test_drive_preview_rejects_invalid_source_type_and_version_conflicts(self):
+        spec = drive_preview_spec(operation="copy")
+        spec["scope"]["source_type"] = "bucket"
+        with self.assertRaisesRegex(GuardError, "不支持源类型"):
+            make_preview(spec)
+
+        spec = drive_preview_spec(operation="copy")
+        spec["scope"]["source_type"] = "folder"
+        spec["before_state"]["source"]["type"] = "folder"
+        with self.assertRaisesRegex(GuardError, "不支持源类型 folder"):
+            make_preview(spec)
+
+        spec = drive_preview_spec(operation="update")
+        spec["scope"]["resource_type"] = "file"
+        spec["before_state"]["resource"]["type"] = "file"
+        spec["changes"]["apply_arguments"]["data"]["obj_type"] = "file"
+        with self.assertRaisesRegex(GuardError, "不支持资源类型 file"):
+            make_preview(spec)
+
+        spec = drive_preview_spec(operation="update")
+        spec["before_state"]["versions"] = [{"name": "M4 版本能力验收"}]
+        with self.assertRaisesRegex(GuardError, "已有同名版本"):
+            make_preview(spec)
+
+        spec = drive_preview_spec(operation="update")
+        spec["changes"]["apply_arguments"]["data"]["name"] = "被篡改的版本名"
+        with self.assertRaisesRegex(GuardError, "调用参数"):
+            make_preview(spec)
+
+        spec = drive_preview_spec(operation="move")
+        spec["before_state"]["source"]["parent_folder_token"] = "another-folder"
+        with self.assertRaisesRegex(GuardError, "source_parent_folder_token 与 before_state 不一致"):
+            make_preview(spec)
+
+    def test_drive_copy_accepts_docx_without_source_parent(self):
+        spec = drive_preview_spec(operation="copy")
+        spec["scope"].pop("source_parent_folder_token")
+        spec["scope"]["source_type"] = "docx"
+        spec["before_state"]["source"].pop("parent_folder_token")
+        spec["before_state"]["source"]["type"] = "docx"
+        spec["changes"]["apply_arguments"]["data"]["type"] = "docx"
+        self.assertEqual("copy", make_preview(spec)["operation"])
+
+    def test_drive_preview_locks_apply_arguments(self):
+        for operation in ("create", "copy", "move"):
+            spec = drive_preview_spec(operation=operation)
+            spec["changes"]["apply_arguments"]["useUAT"] = False
+            with self.subTest(operation=operation), self.assertRaisesRegex(GuardError, "调用参数"):
+                make_preview(spec)
 
 
 if __name__ == "__main__":

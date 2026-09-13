@@ -107,3 +107,15 @@ Use this result shape:
 目标：<resource and scope>
 本次未执行任何修改，也未尝试其他通道。
 ```
+
+## M4 knowledge-management capability contract
+
+The 2026-09-12 metadata snapshot exposes 16 `wiki`, 52 `drive`, and 3 `minutes` tools. Only the Wiki and Drive subsets below currently enter implementation; Minutes is deferred by product decision D-021.
+
+- Wiki: resolve spaces and nodes, page through child nodes, search nodes, and prepare separately scoped previews for node creation, copy, move, title update, or moving an existing cloud document into Wiki.
+- Drive: list one exact folder, batch-read exact file metadata, inspect collaborators and public settings, and prepare previews for folder creation, file copy or move, and document-version creation. Async operations require their matching task or result read before success is reported.
+Drive does not expose the upload-part step between upload prepare and finish. Treat local-file upload as unavailable. Import may be considered only when the user already supplies a valid existing file token; never imply that a local file can be uploaded. Folder listing is not global full-text search.
+
+Drive exposes export-task creation and result lookup, but no tool to download the exported file. A successful task plus file metadata proves only task generation, not file usability or content integrity. Do not report full export verification or completion without a supported download-and-open check.
+
+Member deletion, file deletion, version deletion, ownership transfer, and public-permission mutations remain disabled even though some tools are visible. Use `useUAT: true` explicitly and preserve the common preview, conflict, and verification requirements for every allowed mutation.

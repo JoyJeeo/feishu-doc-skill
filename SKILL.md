@@ -1,6 +1,6 @@
 ---
 name: feishu-doc-skill
-description: Read, analyze, preview, create, or update Feishu China cloud documents through an already connected Feishu MCP. Use for Feishu Docs, Sheets, Bitable, Wiki, Drive, Minutes, and cross-resource document organization. Every write requires a confirmed preview; never use browser automation or OpenAPI as a fallback.
+description: Read, analyze, preview, create, or update Feishu China cloud documents through an already connected Feishu MCP. Use for Feishu Docs, Sheets, Bitable, Wiki, Drive, and cross-resource document organization. Every write requires a confirmed preview; never use browser automation or OpenAPI as a fallback.
 ---
 
 # Feishu Cloud Documents
@@ -14,7 +14,7 @@ Use this skill for personal Feishu China cloud-document work. Remote Feishu acce
 - If the required Feishu MCP tool is unavailable, report the missing capability and stop that operation.
 - Use user identity by default. When a tool supports `useUAT`, set it explicitly to `true`.
 - Never retry a failed user-identity call with application identity. Application identity requires an explicit user request and a new preview.
-- Treat an initial change request as authorization to prepare a preview only. Write only after the user confirms that preview's `preview_id`.
+- Treat an initial change request as authorization to prepare a preview only. Render every preview as a locally viewable effect confirmation showing the actual content, before/after difference, and unaffected scope. A `preview_id` only binds the operation and never substitutes for the visible preview. Write only after the user confirms the displayed operation.
 - Before writing, reread the target and compare its state fingerprint. If it changed, invalidate the preview.
 - After writing, reread the target and verify the declared result.
 - Deletion, ownership transfer, and public-permission changes are disabled.
@@ -27,7 +27,7 @@ Read [references/common/safety-policy.md](references/common/safety-policy.md) an
 |---|---|---|
 | `analyze` | The user asks to read, inspect, summarize, or audit without changes | [workflows/analyze.md](workflows/analyze.md) |
 | `preview` | The user asks to create, change, move, organize, or format a Feishu resource | [workflows/preview.md](workflows/preview.md) |
-| `apply` | The user confirms a specific valid `preview_id` | [workflows/apply.md](workflows/apply.md) |
+| `apply` | The user confirms the specific locally displayed preview bound to a valid `preview_id` | [workflows/apply.md](workflows/apply.md) |
 | `verify` | The user asks to check an existing result, or a write just completed | [workflows/verify.md](workflows/verify.md) |
 
 If the request contains both read-only analysis and a possible change, complete the analysis and produce a preview; do not apply the change in the same initial turn.
@@ -45,6 +45,10 @@ For any `docx` content request, read [references/docx/document-model.md](referen
 For a section-level append, insert, replace, formatting change, or document table, read [references/docx/editing-formatting.md](references/docx/editing-formatting.md), then follow [workflows/docx-edit-preview.md](workflows/docx-edit-preview.md). The common `apply` and `verify` workflows remain mandatory after preview confirmation.
 
 For any Bitable request, read [references/bitable/data-model.md](references/bitable/data-model.md). For record creation or updates, follow [workflows/bitable-record-preview.md](workflows/bitable-record-preview.md); the common `apply` and `verify` workflows remain mandatory after preview confirmation.
+
+For a Sheets request, read [references/sheets/find-replace.md](references/sheets/find-replace.md). Only worksheet identification and exact-text whole-cell find/replace inside one rectangular A1 range are supported. For a replacement, follow [workflows/sheets-find-replace-preview.md](workflows/sheets-find-replace-preview.md); the common `apply` and `verify` workflows remain mandatory after preview confirmation.
+
+For a Wiki request, read [references/wiki/read-model.md](references/wiki/read-model.md)。若涉及 Wiki 创建、复制、移动或改名，请先读 [references/wiki/write-model.md](references/wiki/write-model.md)。For Drive folder/file lookup、metadata、协作者或公开设置查看，请读 [references/drive/read-model.md](references/drive/read-model.md)。涉及文件夹创建、文件复制/移动或文件版本更新，请改读 [references/drive/write-model.md](references/drive/write-model.md)。Use [config/default-locations.json](config/default-locations.json) only when the user does not specify a location; an explicit target always overrides it.
 
 ## Stop conditions
 

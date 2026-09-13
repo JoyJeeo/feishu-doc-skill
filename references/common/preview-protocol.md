@@ -27,17 +27,18 @@ Deletion, ownership transfer, and public-permission changes are not valid operat
 1. Read the target with user identity.
 2. Build the proposed change without remote mutation.
 3. Produce a preview and `preview_id`.
-4. If the preview contains converter-generated block IDs or another transient nested payload, persist the exact non-sensitive payload in a task-local temporary artifact before requesting confirmation. Do not rely on memory-only state across user turns.
-5. Wait for the user to confirm that exact identifier.
-6. Reread the target and recompute its fingerprint.
-7. Invalidate the preview if the fingerprint, target, identity, scope, required tools, or persisted payload changed or is unavailable.
-8. Apply only the declared change, reading transient nested arguments from the persisted artifact without reconstruction.
-9. Reread and verify the result.
-10. Mark the preview as applied in the current task context so it cannot be applied again, then remove its temporary artifact.
+4. Render the preview as a locally viewable effect confirmation that exposes the actual proposed content or structural change, before/after state, unaffected scope, risks, and verification plan. The user must not need to decode the structured object or identifier.
+5. If the preview contains converter-generated block IDs or another transient nested payload, persist the exact non-sensitive payload in a task-local temporary artifact before requesting confirmation. Do not rely on memory-only state across user turns.
+6. Wait for the user to confirm the exact displayed operation bound to that identifier.
+7. Reread the target and recompute its fingerprint.
+8. Invalidate the preview if the fingerprint, target, identity, scope, required tools, or persisted payload changed or is unavailable.
+9. Apply only the declared change, reading transient nested arguments from the persisted artifact without reconstruction.
+10. Reread and verify the result.
+11. Mark the preview as applied in the current task context so it cannot be applied again, then remove its temporary artifact.
 
 ## Confirmation
 
-Valid confirmation must unambiguously refer to the current preview, preferably by `preview_id`. Generic statements made before preview generation do not count as confirmation.
+Valid confirmation must unambiguously refer to the current locally displayed effect confirmation. The `preview_id` is an internal anti-misbinding identifier and may be shown for traceability, but it is not a user-facing preview and the user does not need to type it. Generic statements made before preview generation do not count as confirmation.
 
 ## Cross-resource changes
 
@@ -49,6 +50,7 @@ Create one preview per resource. Confirmation of one preview does not authorize 
 - Sheets: show sheet name, range, changed dimensions, and representative differences.
 - Bitable: show table, record selection rule, affected count, and field changes.
 - Wiki or Drive: show source, destination, names, and permission effects.
+- Metadata-only operations such as version creation: show the exact metadata being created and explicitly state which document content and properties remain unchanged.
 - New resources: show final parent location and complete initial structure.
 
 Use `scripts/feishu_guard.py make-preview` and `validate-preview` for deterministic checks.
